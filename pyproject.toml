@@ -1,0 +1,19 @@
+[project]
+name = "opencode-ip-rotator"
+version = "1.0.0"
+description = "Cloudflare WARP IP rotator with health monitoring for opencode"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta:__legacy__"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
