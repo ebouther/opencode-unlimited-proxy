@@ -1,0 +1,60 @@
+services:
+  config-init:
+    image: busybox:latest
+    command: ["sh","-c","install -o 1000 -g 1000 -m 644 /seed.json /vol/config.json"]
+    volumes:
+      - ./config.json:/seed.json:ro
+      - ofu-engine:/vol
+    restart: "no"
+
+  warp-rotator:
+    image: opencode-ip-rotator-warp-rotator:latest
+    container_name: ofu-warp
+    privileged: true
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "18080:8888"   # tinyproxy (rotating egress)
+      - "18082:8080"   # opencode2api engine
+      - "18083:8081"   # opencode2api webui
+      - "18084:8000"   # opencode-ip-rotator dashboard
+    environment:
+      - WARP_ROTATION_INTERVAL=300
+      - CORS_ALLOW_ORIGINS=*
+    volumes:
+      - ofu-warp:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8001/health >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  connect-proxy:
+    image: alpine:latest
+    command: ["/bin/sh","-c","apk add --no-cache tinyproxy >/dev/null && printf 'Port 8888\nAllow 127.0.0.1\nConnectPort 443\nConnectPort 80\n' >/etc/tinyproxy/tinyproxy.conf && tinyproxy -d"]
+    container_name: ofu-proxy
+    network_mode: service:warp-rotator
+    cap_add: [NET_ADMIN]
+    restart: unless-stopped
+    depends_on:
+      - warp-rotator
+
+  opencode-engine:
+    image: ghcr.io/jasonxu114514/opencode2api:latest
+    container_name: ofu-engine
+    network_mode: service:warp-rotator
+    volumes:
+      - ofu-engine:/var/lib/opencode2api
+    restart: unless-stopped
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+      warp-rotator:
+        condition: service_healthy
+
+volumes:
+  ofu-warp:
+  ofu-engine:

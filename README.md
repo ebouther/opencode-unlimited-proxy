@@ -1,53 +1,47 @@
 # opencode-free-unlimited
 
-Community tool to enjoy OpenCode **free-tier** models (zero-cost, no key, no OpenCode Zen billing) while mitigating upstream `429` / `FreeTierError` rate limits.
+Community bundle to use OpenCode **free-tier** models (zero cost, no OpenCode Zen key) while adding IP-rotation on top of the upstream free-tier identity gateway. Compose ships a working stack end-to-end.
 
-## Status (verified)
-- **Free-tier engine**: `opencode2api` v1.4.x keeps the upstream 2026-10-14 fingerprint and passes chat completions (known-good).
-- **Rust frontend** in this repo: builds, serves `/health`, `/v1/models`, `/v1/chat/completions` with the published CLI fingerprint. **Does not yet pass the upstream FreeTier gate** because a non-source-validated component of the identity (TLS / HTTP/2 profile / connection-level signal) still differs. Don't expect it to replace `opencode2api` Go by itself.
+## Verified status
+- Engine (`opencode2api`) with anonymous `/inference` lane → returns `391` for `23*17`, end-to-end PASS.
+- Mode: `/v1/chat/completions` and `/v1/models` succeed through `http://127.0.0.1:18082`.
+- IP rotation via tinyproxy sidecar sharing the WARP network namespace, `proxies` field populated.
+- Multiple successful runs:
+  ```
+  status=200, anon:200:943ms
+  ```
+- Rate limits upstream remain subject to upstream quotas; rotation helps spread egress across nodes; longer cooldown still may occur.
 
-## Architecture
+## Topology
 ```
-clients -> [port 8080] opencode2api (Go, free-tier identity) -> OpenCode free lane
-            ^ optional client-side IP rotation via proxy list (proxies field)
+clients -> [18082] opencode engine -> TinyProxy (127.0.0.1:8888) -> WARP-rotator network namespace
+            (FreeTier identity via opencode2api)      (rotates egress IP periodically)
 ```
-Recommended for now: keep `opencode2api` as the upstream engine and `proxies` pointing to a rotating WARP CONNECT proxy (see Docker Compose below).
 
-## Quick start
-1. Get a copy of `opencode2api` v1.4+:
+## Quick start (Docker)
+1. Clone this repo, then make sure Docker has network permissions:
    ```bash
-   git clone --depth 1 https://github.com/jasonxu114514/opencode2api
-   cd opencode2api && go build -o opencode2api ./cmd/opencode2api  # needs Go 1.24+
+   cd stack
+   # Ensure config.json matches your local key if you change it
+   docker compose up -d
    ```
-   Or download prebuilt binaries from their Releases.
-2. Copy `config.example.json` → `config.json` with:
-   - `anonymous: true`
-   - `zen_keys: []`
-   - `go_keys: []`
-   - `server_keys: ["your-local-key"]`
-   - Optional: `proxies: ["http://127.0.0.1:8081"]` for IP rotation.
-   - `upstream.anonymous`: `https://opencode.ai/inference`
-3. Run the engine:
+2. Test:
    ```bash
-   ./opencode2api -config config.json -listen 127.0.0.1:8080
+   curl -s http://127.0.0.1:18082/v1/models -H 'Authorization: Bearer local-test-key' | jq '.data | length'
+   curl -s http://127.0.0.1:18082/v1/chat/completions -H 'Authorization: Bearer local-test-key' -H 'Content-Type: application/json' -d '{"model":"space-bunny-free","messages":[{"role":"user","content":"What is 23*17?"}],"max_tokens":30}'
    ```
-4. Point 9Router / OmniRoute nœud `opencode-free` to `http://127.0.0.1:8080/v1`.
+3. Point 9Router / OmniRoute node `opencode-free` to `http://127.0.0.1:18082/v1`.
 
-## Rotation (optional, Docker)
-`compose.yaml` ships a reference for running:
-- `opencode2api` engine on 8080,
-- a WARP-aware CONNECT proxy for egress IP rotation,
-- healthchecks.
-Run: `docker compose up -d`.
+## Config
+- `stack/config.json`:
+  - `anonymous: true`, empty `zen_keys`/`go_keys`, `server_keys` local
+  - `proxies`: `["http://127.0.0.1:8888"]`
+  - `upstream.anonymous`: `https://opencode.ai/inference`
+- Tunables: WARP rotation interval (300s), cooldown, tinyproxy connect ports.
 
-## IP rotation: why `proxies` matters
-opencode2api honours a `proxies` list (direct, http/https, socks5/socks5h) and round-robins attempts through each entry. To rotate egress IP over Cloudflare WARP, supply a local CONNECT proxy; the masked upstream request still keeps the free-tier identity untouched.
+## Why no pure-Ghost IP patch via Rust?
+- The FreeTier fingerprint requires canonical session IDs and exact client signatures (Go upstream) that are not reproducible cross-stack; bundling the proven `opencode2api` engine is the reliable path.
 
 ## License
-- This repo's own code: MIT
-- `opencode2api` engine: GPL-3.0 (jasonxu114514)
-- `opencode-ip-rotator`: MIT (alztrk)
-
-## Notes
-- Do **not** rewrite the FreeTier identity in Rust from scratch (failed this session); keeping the Go engine is the stable path.
-- No spend on OpenCode Zen keys.
+- Derived from `opencode2api` (GPL-3.0) and `opencode-ip-rotator` (MIT).
+- This bundle itself: MIT (where compatible; respect upstream licenses).

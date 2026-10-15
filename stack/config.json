@@ -1,0 +1,19 @@
+{
+  "listen": "0.0.0.0:8080",
+  "server_keys": ["local-test-key"],
+  "zen_keys": [],
+  "go_keys": [],
+  "anonymous": true,
+  "proxies": ["http://127.0.0.1:8888"],
+  "proxyfile": "",
+  "upstream": {
+    "zen": "https://opencode.ai/zen",
+    "go": "https://opencode.ai/zen/go",
+    "anonymous": "https://opencode.ai/inference"
+  },
+  "retry": {"max_attempts": 2, "timeout_seconds": 180},
+  "models": {"refresh_seconds": 300, "protocols": {}, "free_only": true},
+  "performance": {"max_idle_conns": 128, "max_idle_conns_per_host": 32, "max_conns_per_host": 0, "idle_conn_timeout_seconds": 60, "connect_timeout_seconds": 10, "failure_cooldown_seconds": 15, "attempt_timeout_seconds": 0, "first_event_timeout_seconds": 0},
+  "logging": {"level": "info", "ring_size": 1000, "dump_request_bodies": false},
+  "webui": {"enabled": true, "listen": "0.0.0.0:8081", "username": "admin", "password": "changeme-changeme", "session_ttl_minutes": 720}
+}
