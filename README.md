@@ -1,19 +1,33 @@
-# opencode-free-unlimited
+# opencode-unlimited-proxy
 
 A self-hosted, **zero-cost** OpenAI-compatible gateway for the OpenCode **free
 tier** (no API key, no spend), fronted by a pool of rotating egress addresses so
 a single IP quota is not the only thing standing between you and a working
 session.
 
-> **Read this before you expect "unlimited".**
-> This bundle is **not** unlimited and does not claim to be. OpenCode's free
-> tier enforces per-egress-address quotas and rate limits. Rotating addresses
-> multiplies the budget you can reach; it does not remove it. What you get is
-> *more room before you hit a wall*, plus automatic failover when one address
-> runs dry. Rotating egress to appear as many different users may also breach
-> OpenCode's terms of service — that risk is yours, at your own cost, on your
-> own infrastructure. Nothing here is affiliated with or endorsed by OpenCode,
-> Cloudflare, or the upstream projects.
+## What this does, and what it does not
+
+**Does**
+- Serves OpenCode's free-tier models (`space-bunny-free`, `mimo-v2.6-flash-free`,
+  `big-pickle`, …) through an OpenAI-compatible API, with **no key and no cost**.
+- Reproduces the complete client fingerprint the free tier gates on — including
+  the two most people miss: the `{bash, glob, grep, read}` tool quartet and
+  forced `stream: true`. See [`docs/free-tier-gates.md`](docs/free-tier-gates.md).
+- Multiplies your usable budget across N egress addresses, and fails over
+  automatically when one address goes unhealthy or hits its quota.
+
+**Does not**
+- Remove the upstream quota. It is still **per egress address**, so the ceiling
+  is `N × per-address quota`, not infinity. `N` is however many nodes you run.
+- Guarantee that any address is accepted. WARP is a shared consumer network:
+  addresses repeat, are geolocated unexpectedly, and can be refused outright.
+- Carry a warranty against upstream changes. The free-tier fingerprint is not a
+  published contract and has already changed twice (≈2026-10-11, ≈2026-10-13).
+- Carry any affiliation with OpenCode, Cloudflare, or the upstream projects.
+
+> Rotating egress to reach more of a free tier than a single address allows may
+> breach OpenCode's terms of service. That call is yours, on your own
+> infrastructure, at your own cost.
 
 ---
 
@@ -58,13 +72,21 @@ capacity guarantee.
 ## Quick start
 
 ```bash
-git clone <this-repo> && cd opencode-free-unlimited/stack
+git clone <this-repo> && cd opencode-unlimited-proxy/stack
 
 # optional: edit the pool size before the first start
 python3 generate-compose.py --nodes 6
 
+# The WARP nodes need the Cloudflare terms of service to be accepted explicitly.
+# Read them first: https://www.cloudflare.com/application/terms/
+cp .env.example .env && sed -i 's/WARP_ACCEPT_TOS=0/WARP_ACCEPT_TOS=1/' .env
+
 docker compose up -d --build      # first run builds the WARP + tinyproxy images
 ```
+
+Already have your own proxies? Skip the WARP nodes entirely: put them in the
+`proxies` array of `config.json`, delete the `alztrk-warp-*` / `tinyproxy-*`
+services from `docker-compose.yml`, and you never touch Cloudflare's terms.
 
 Then verify:
 
@@ -91,11 +113,11 @@ Endpoints once it is up:
 ```jsonc
 // ~/.config/opencode/opencode.jsonc
 {
-  "model": "opencode-free-unlimited/space-bunny-free",
+  "model": "opencode-unlimited-proxy/space-bunny-free",
   "provider": {
-    "opencode-free-unlimited": {
+    "opencode-unlimited-proxy": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "opencode-free-unlimited",
+      "name": "opencode-unlimited-proxy",
       "options": {
         "baseURL": "http://127.0.0.1:8080/v1",
         "apiKey": "local-test-key"          // must match stack/config.json server_keys
@@ -177,6 +199,71 @@ configured retries.
 | `FreeTierError` / `429` on every request | The engine could not present a valid identity, or the address bucket is empty. Check `docker logs ofu-engine`. |
 | `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine for some models (`cat-jam-free` observed). Use `space-bunny-free` for multi-turn, or disable the reasoning field client-side. |
 | Node restarts in a loop, `bind: address already in use` | Something else holds 8080/8081. The engine uses host networking; free the ports. |
+
+## Legal and terms of service
+
+**Publishing this repository is fine. Operating it is where the risk lives.**
+The two are separate questions, and the second one is not about licences.
+
+### Licences — verified compatible
+`MIT` for this repository's own files. The engine
+(`ghcr.io/jasonxu114514/opencode2api`, **GPL-3.0**) is *not* redistributed
+here, only referenced as a public container image, so no GPL obligation attaches
+to these files. `stack/warp/` is MIT code from `alztrk/opencode-ip-rotator` with
+its licence text preserved. `tinyproxy` (GPL-2.0) is installed from Alpine at
+build time, not redistributed. See [`NOTICE`](NOTICE).
+
+Using the name "opencode" is nominative, to state compatibility. No affiliation
+with or endorsement by OpenCode is claimed or implied.
+
+### Cloudflare WARP — read this before running the default pool
+The default egress source is the Cloudflare WARP client. It is a **consumer VPN
+product** under the [Cloudflare Application Terms of
+Service](https://www.cloudflare.com/application/terms/), and those terms say
+things that matter here:
+
+> **§3 — VPN Profile**: "the Application operates similarly to a VPN product or
+> service, **the Application is not designed to hide your identity** from the
+> Internet properties you access from your device."
+
+> **§2 — Scope of License**: use is licensed "on the device for which it is
+> provided and that you own or control", is non-transferable, and must not
+> "create derivative works".
+
+> **§6 — User Responsibilities**: "Cloudflare may not be used to **misrepresent**
+> or to act on behalf of others", and must not "create an **undue burden** on the
+> Application or the networks". A complaint to Cloudflare can result in
+> termination "without notice".
+
+Rotating egress to appear as several different users is outside what §3 says the
+product is for. Running several instances of the consumer client in containers
+sits outside the "one device you control" model in §2. Neither is clearly
+permitted, and neither is clearly forbidden — that is the honest reading.
+
+What this means in practice: the account can be closed, usage can be limited or
+blocked, and complaints go to a dedicated abuse mailbox
+(`warpabuse@cloudflare.com`). Cloudflare's liability for consumer products is
+capped, and disputes go to arbitration. A breach of terms is a contract matter,
+not a criminal one — and publishing this repository is not the breach; running it
+is.
+
+Because of that, **the WARP terms are never accepted for you**: the nodes refuse
+to start unless you set `WARP_ACCEPT_TOS=1` in `stack/.env`, which is an
+explicit act of yours.
+
+### The alternative that sidesteps all of it
+This bundle makes no assumption about where the proxies come from. `config.json`
+takes any HTTP/SOCKS proxy list. If you have your own egress — a residential
+pool, a datacentre fleet, a company gateway — use that and drop the
+`alztrk-warp-*` / `tinyproxy-*` services entirely. Cloudflare's terms then have
+no bearing on your setup, and neither do their rotators' limits.
+
+### OpenCode's own terms
+Not verified here. Before operating this at scale, read OpenCode's terms for the
+free tier yourself: if they prohibit circumventing quotas, that is a second
+contract question independent of Cloudflare's.
+
+---
 
 ## Known limitations
 

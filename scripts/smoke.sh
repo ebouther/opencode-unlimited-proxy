@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test for the opencode-free-unlimited stack.
+# Smoke test for the opencode-unlimited-proxy stack.
 #
 #   ./scripts/smoke.sh [base_url] [api_key] [model]
 #
@@ -17,12 +17,12 @@ fail=0
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 check() { if [ "$1" -eq 0 ]; then echo "PASS: $2"; else echo "FAIL: $2"; fail=1; fi; }
 
-step "1/5  engine reachable on $BASE_URL"
+step "1/6  engine reachable on $BASE_URL"
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$BASE_URL/health" 2>/dev/null)
 [ "$code" = "200" ] || [ "$code" = "404" ]
 check $? "engine answers on /health or / (got $code)"
 
-step "2/5  model catalogue"
+step "2/6  model catalogue"
 models=$(curl -s -m 15 "$BASE_URL/v1/models" -H "Authorization: Bearer $API_KEY")
 count=$(printf '%s' "$models" | python3 -c 'import json,sys
 try:
@@ -32,7 +32,7 @@ except Exception:
 [ "${count:-0}" -gt 0 ]
 check $? "v1/models returned $count models"
 
-step "3/5  proxy pool reachable (each proxy must forward to an ip echo)"
+step "3/6  proxy pool reachable (each proxy must forward to an ip echo)"
 # Proxy ports are read from the engine config so this stays correct after a resize.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ports=$(python3 -c "
@@ -56,20 +56,41 @@ if [ -z "$ports" ]; then echo "SKIP: could not read stack/config.json proxies"; 
   check $? "all $total proxy nodes reachable"
 fi
 
-step "4/5  free-tier chat completion ($MODEL)"
-body=$(curl -s -m 120 -X POST "$BASE_URL/v1/chat/completions" \
-  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: OK\"}],\"max_tokens\":120}")
-printf '%s' "$body" | python3 -c 'import json,sys
+# A single free-tier completion. Retries once: when the engine is shared with
+# other clients, a single request can lose the race and hit a 60s timeout.
+# Two consecutive failures is the real signal.
+ask_chat() { # $1 = extra json fragment (e.g. '"stream":false,')
+  local extra="$1"
+  for attempt in 1 2; do
+    body=$(curl -s -m 150 -X POST "$BASE_URL/v1/chat/completions" \
+      -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+      -d "{\"model\":\"$MODEL\",${extra}\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: OK\"}],\"max_tokens\":120}")
+    if printf '%s' "$body" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
 if d.get("error"):
     sys.exit(1)
 msg = d["choices"][0]["message"]
 text = (msg.get("content") or "") + (msg.get("reasoning_content") or "")
-sys.exit(0 if "OK" in text else 1)' 2>/dev/null
+sys.exit(0 if "OK" in text else 1)' 2>/dev/null; then
+      return 0
+    fi
+    echo "  (attempt $attempt failed, retrying)"
+  done
+  return 1
+}
+
+step "4/6  free-tier chat completion ($MODEL)"
+ask_chat ""
 check $? "chat completion returned content"
 
-step "5/5  webui reachable on $WEBUI"
+# Gates 3 and 4 of the free-tier fingerprint: no tools at all, and stream:false.
+# A gateway that only mints valid session headers returns 403 for this exact
+# shape. See docs/free-tier-gates.md -- this is the cheapest canary we have.
+step "5/6  fingerprint gate: zero tools + stream:false"
+ask_chat '"stream":false,'
+check $? "zero-tool non-stream request accepted (gates 3+4 intact)"
+
+step "6/6  webui reachable on $WEBUI"
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$WEBUI/" 2>/dev/null)
 [ "$code" = "200" ]
 check $? "webui answers 200 (got $code)"

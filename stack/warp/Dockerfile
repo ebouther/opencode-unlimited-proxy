@@ -28,16 +28,12 @@ WORKDIR /app
 
 COPY rotator.py .
 COPY manager.py .
+COPY entrypoint.sh .
 
-RUN echo '#!/bin/bash\n\
-service dbus start\n\
-warp-svc &\n\
-sleep 3\n\
-warp-cli --accept-tos registration new\n\
-warp-cli --accept-tos mode warp\n\
-warp-cli --accept-tos connect\n\
-sleep 3\n\
-exec python3 rotator.py\n\
-' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+# rotator.py + manager.py are verbatim from alztrk/opencode-ip-rotator (MIT,
+# see LICENSE in this directory). entrypoint.sh is derived from that project's
+# Dockerfile.warp entrypoint: the Cloudflare ToS must be accepted explicitly
+# via WARP_ACCEPT_TOS=1 instead of being accepted silently here.
+RUN chmod +x /app/entrypoint.sh
 
 ENTRYPOINT ["/app/entrypoint.sh"]

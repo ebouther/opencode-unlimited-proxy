@@ -36,6 +36,7 @@ services:
     environment:
       - CORS_ALLOW_ORIGINS=*
       - WARP_ROTATION_INTERVAL=120
+      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18090:8888"
     volumes:
@@ -54,6 +55,7 @@ services:
     environment:
       - CORS_ALLOW_ORIGINS=*
       - WARP_ROTATION_INTERVAL=145
+      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18091:8888"
     volumes:
@@ -72,6 +74,7 @@ services:
     environment:
       - CORS_ALLOW_ORIGINS=*
       - WARP_ROTATION_INTERVAL=170
+      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18092:8888"
     volumes:
@@ -90,6 +93,7 @@ services:
     environment:
       - CORS_ALLOW_ORIGINS=*
       - WARP_ROTATION_INTERVAL=195
+      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18093:8888"
     volumes:
@@ -108,6 +112,7 @@ services:
     environment:
       - CORS_ALLOW_ORIGINS=*
       - WARP_ROTATION_INTERVAL=220
+      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18094:8888"
     volumes:
@@ -126,6 +131,7 @@ services:
     environment:
       - CORS_ALLOW_ORIGINS=*
       - WARP_ROTATION_INTERVAL=245
+      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18095:8888"
     volumes:
@@ -139,7 +145,7 @@ services:
       - alztrk-warp-f
 
   opencode-engine:
-    image: ghcr.io/jasonxu114514/opencode2api:latest
+    image: ghcr.io/jasonxu114514/opencode2api:v1.4.0
     container_name: ofu-engine
     network_mode: host   # so 127.0.0.1:<proxy port> resolves the pool
     volumes:

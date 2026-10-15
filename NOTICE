@@ -1,6 +1,6 @@
 # NOTICE
 
-`opencode-free-unlimited` is a thin orchestration bundle. It contains **no
+`opencode-unlimited-proxy` is a thin orchestration bundle. It contains **no
 vendored copy of the inference engine**: the engine runs from a public
 container image. What lives in this repository is Docker Compose glue plus
 build context for two helper images.
@@ -8,9 +8,8 @@ build context for two helper images.
 ## Third-party components
 
 ### Cloudflare WARP rotator — `stack/warp/`
-Files: `Dockerfile`, `rotator.py`, `manager.py`, `LICENSE`
-
-Copied verbatim from [`alztrk/opencode-ip-rotator`](https://github.com/alztrk/opencode-ip-rotator)
+Files: `rotator.py`, `manager.py`, `LICENSE` — **copied verbatim** from
+[`alztrk/opencode-ip-rotator`](https://github.com/alztrk/opencode-ip-rotator)
 (`Dockerfile.warp`). Licensed under the MIT License, Copyright (c) 2026 alztrk.
 The original license text is preserved in `stack/warp/LICENSE`.
 
@@ -18,12 +17,18 @@ The original license text is preserved in `stack/warp/LICENSE`.
 its own network namespace, and re-establishes the tunnel on the
 `WARP_ROTATION_INTERVAL` cycle so the container's egress address changes.
 
+Files: `Dockerfile`, `entrypoint.sh` — **derived from** the same project's
+`Dockerfile.warp`, with one substantive change: upstream's entrypoint accepted the
+Cloudflare terms of service automatically (`warp-cli --accept-tos ...`). Here
+that acceptance is an explicit opt-in via `WARP_ACCEPT_TOS=1`, so no legal
+agreement is entered on a user's behalf. The remainder of the build is unchanged.
+
 ### CONNECT proxy — `stack/tinyproxy/`
 Files: `Dockerfile`, `tinyproxy.conf`
 
 Thin `tinyproxy` packaging on top of Alpine Linux (`apk add tinyproxy`).
-tinyproxy is GPL-2.0-or-later; it is installed as an Alpine package at build
-time, not vendored here.
+tinyproxy is licensed **GPL-2.0**; it is installed as an Alpine package at
+build time, not vendored here, so no source-distribution obligation arises.
 
 ### Inference engine — pulled at runtime, not distributed here
 `ghcr.io/jasonxu114514/opencode2api:latest` — [`jasonxu114514/opencode2api`](https://github.com/jasonxu114514/opencode2api),
@@ -39,4 +44,13 @@ endorsement is claimed.
 ## Scope of the license
 The MIT license in `LICENSE` covers this repository's own files: the Compose
 files, `stack/config.json`, `stack/generate-compose.py`, `stack/tinyproxy/`,
-`scripts/`, and `README.md`. It does not relicense the components above.
+`stack/warp/entrypoint.sh`, `scripts/`, `docs/`, and `README.md`. It does not
+relicense the components above; `stack/warp/rotator.py` and
+`stack/warp/manager.py` remain under alztrk's MIT license.
+
+## Terms of service, not licences
+Two separate questions are easy to conflate. Publishing this repository raises
+no licensing issue. *Running* it involves services with their own terms — see
+the "Legal and terms of service" section of `README.md`, which quotes the
+relevant Cloudflare Application Terms of Service and explains why the Cloudflare
+terms are accepted only through an explicit `WARP_ACCEPT_TOS=1` opt-in.

@@ -22,7 +22,11 @@ import string
 
 STACK = pathlib.Path(__file__).resolve().parent
 
-WARP_IMAGE = "ghcr.io/jasonxu114514/opencode2api:latest"
+# The engine implements the four free-tier gates (see docs/free-tier-gates.md).
+# Pinned on purpose: upstream broke compatibility twice in one week
+# (v1.3.8 session layout, v1.4.0), and `latest` is a liability for a shared repo.
+# To upgrade: check https://github.com/jasonxu114514/opencode2api/releases
+ENGINE_IMAGE = "ghcr.io/jasonxu114514/opencode2api:v1.4.0"
 ENGINE_KEY = "local-test-key"  # dev-only key, override in config.json for real use
 
 
@@ -75,6 +79,8 @@ def compose(n_nodes: int, base_port: int, interval: int) -> str:
         w("    environment:")
         w("      - CORS_ALLOW_ORIGINS=*")
         w(f"      - WARP_ROTATION_INTERVAL={rot}")
+        # Cloudflare's terms must be accepted explicitly, never silently.
+        w("      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}")
         w("    ports:")
         w(f'      - "{ports[node]}:8888"')
         w("    volumes:")
@@ -89,7 +95,7 @@ def compose(n_nodes: int, base_port: int, interval: int) -> str:
         w("")
 
     w("  opencode-engine:")
-    w(f"    image: {WARP_IMAGE}")
+    w(f"    image: {ENGINE_IMAGE}")
     w("    container_name: ofu-engine")
     w("    network_mode: host   # so 127.0.0.1:<proxy port> resolves the pool")
     w("    volumes:")
