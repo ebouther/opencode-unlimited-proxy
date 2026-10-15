@@ -1,31 +1,39 @@
-# Python bytecode & cache
+# Local overrides and secrets
+.env
+.env.*
+!.env.example
+
+# Keys / credentials that must never be committed
+*keys*.txt
+proxies.txt
+secrets/
+
+# Python (only stack/warp/*.py is tracked, no virtualenvs expected)
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-
-# Environments
 .venv/
-env/
 venv/
-ENV/
-.env
 
-# Logs & Temp files
+# Build artefacts
+target/
+dist/
+build/
+*.rlib
+*.rmeta
+
+# Logs / scratch
 *.log
 *.tmp
+*.out
 
-# IDE & OS
+# Local runtime state
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Editors / OS
 .vscode/
 .idea/
 .DS_Store
-
-# Data & SQLite DB
-data/
-*.db
-proxies.txt
-
-# Cloned reference repos
-opencode-src/
-opencode-src-shallow/
+Thumbs.db
