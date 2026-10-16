@@ -58,6 +58,30 @@ pseudo-random timestamp and is refused. This is why gateways that "just hash a
 seed" 403 even though they send a perfectly well-formed `ses_` id. The gate
 appeared around **2026-10-13**.
 
+### The header name is exactly `x-opencode-session`
+
+Measured 2026-10-16, four combinations, everything else in the request held
+constant:
+
+| Session header sent | Result |
+|---|---|
+| `x-opencode-session: ses_…` | `200` |
+| `x-opencode-session-id: ses_…` | `403` |
+| both | `200` |
+| neither | `403` |
+
+So the required header is `x-opencode-session` **without** the `-id` suffix, and
+`x-opencode-session-id` on its own does not satisfy the gate — it appears to be
+ignored rather than rejected. Presence alone is necessary but not sufficient:
+`none of the two` proves the header has to be present, and the encoding rules
+above prove it also has to be correct.
+
+This is worth stating because a near-miss is easy to publish as fact. A
+[byte-level replay report](https://github.com/mdev34-lab/silvercode/issues/315)
+on the same date found the gate requires `x-opencode-session-id`; in that report
+the `-id` variant is the one that fails. Both readings are plausible from one
+sided observation, which is what the four-way table above exists to settle.
+
 If you mint sessions yourself: build the id at mint time, keep it stable for
 the life of the session (it drives prompt-cache affinity), and hex-encode the
 first **6 bytes**, not `subarray(0, 12)` — that is 12 bytes, and interpolating
