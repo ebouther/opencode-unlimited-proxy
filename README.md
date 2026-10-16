@@ -14,14 +14,17 @@ session.
   the two most people miss: the `{bash, glob, grep, read}` tool quartet and
   forced `stream: true`. See [`docs/free-tier-gates.md`](docs/free-tier-gates.md).
 - Multiplies your usable budget across N egress addresses, and fails over
-  automatically when one address goes unhealthy or hits its quota.
+  automatically when one address goes unhealthy or runs dry.
 
 **Does not**
-- Remove the upstream quota. It is still **per egress address**, so the ceiling
-  is `N × per-address quota`, not infinity — and `N` is the number of *distinct*
-  addresses you can actually obtain, not the number of containers you started.
-  With WARP that is roughly the size of the regional address pool, about seven
-  from one French colo. Beyond that, only egress you control will do it.
+- Remove the upstream quota. It appears to be metered **per egress address**, so
+  the ceiling is roughly `N × per-address quota`, not infinity — and `N` is the
+  number of *distinct* addresses you can actually obtain, not the number of
+  containers you started. With WARP that is roughly the size of the regional
+  address pool, about seven from one French colo. Beyond that, only egress you
+  control will do it. That per-address model is inferred from observed
+  behaviour rather than measured at upstream — see
+  [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis).
 - Guarantee that any address is accepted. WARP is a shared consumer network:
   addresses repeat, are geolocated unexpectedly, and can be refused outright.
 - Carry a warranty against upstream changes. The free-tier fingerprint is not a
@@ -39,9 +42,12 @@ session.
 Six WARP containers, six CONNECT proxies, one OpenAI-compatible gateway.
 
 The load-bearing detail is not the number of containers, it is the number of
-**distinct** egress addresses. Quota is bucketed per source address, so six
-nodes behind one address are one bucket, not six. WARP hands out addresses from
-a small per-region pool and assigns them semi-randomly, so nodes collide by
+**distinct** egress addresses. Usage is metered per source address — six nodes
+behind one address are one budget, not six. (That metering model is inferred
+from this stack's own behaviour rather than measured at upstream; see
+[Not a gate: the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis)
+for what was actually observed and how to falsify it.) WARP hands out addresses
+from a small per-region pool and assigns them semi-randomly, so nodes collide by
 default. Measured here on a French colo: `104.28.194.129-.132`,
 `104.28.226.128-.130` and `185.137.228.16` — about seven addresses for six
 nodes, which is barely enough to be worth de-duplicating at all.
@@ -134,6 +140,14 @@ Then verify:
 
 ```bash
 ./../scripts/smoke.sh             # or: ../scripts/smoke.sh
+```
+
+`smoke.sh` checks the bundle end to end. To check *upstream* — whether the
+free-tier fingerprint is still what this repository says it is, independently
+of anything running locally:
+
+```bash
+../scripts/gate-probe.py          # one baseline + five negative controls
 ```
 
 Endpoints once it is up:
@@ -267,7 +281,8 @@ configured retries.
 | Edits to `stack/config.json` seem ignored | The engine reads `/var/lib/opencode2api/config.json` from its **named volume** and prefers it over your file. `config-init` re-seeds it on `docker compose up -d`; to force it: `docker compose down && docker volume rm stack_ofu-engine && docker compose up -d`. |
 | `rename … device or resource busy` at startup | You bind-mounted the config path directly; it must be seeded by `config-init` instead. |
 | `SSL_ERROR_RX_RECORD_TOO_LONG` in the browser | You are on `https://` and/or `localhost`. Use `http://127.0.0.1:8081`. |
-| `FreeTierError` / `429` on every request | The engine could not present a valid identity, or the address bucket is empty. Check `docker logs ofu-engine`. |
+| `FreeTierError` (403) | A gate is unsatisfied, or upstream moved. `./scripts/gate-probe.py` says which gate, without involving this stack. |
+| `FreeUsageLimitError` (429) | Not a gate. The address ran out of budget — nothing in the fingerprint will fix it. See [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis). Widen the pool or wait. |
 | `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine for some models (`cat-jam-free` observed). Use `space-bunny-free` for multi-turn, or disable the reasoning field client-side. |
 | Node restarts in a loop, `bind: address already in use` | Something else holds 8080/8081. The engine uses host networking; free the ports. |
 
@@ -365,7 +380,8 @@ stack/
   tinyproxy/             CONNECT proxy image + drain gate
   dedupe/                address de-duplicator (keeps the pool honest)
 scripts/smoke.sh         one-command verification
-docs/free-tier-gates.md  the four upstream gates, sourced
+scripts/gate-probe.py    isolates each upstream gate; needs no stack running
+docs/free-tier-gates.md  the four upstream gates, plus the quota axis
 NOTICE                   third-party attribution
 ```
 

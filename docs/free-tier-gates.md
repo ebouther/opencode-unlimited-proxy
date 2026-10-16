@@ -1,10 +1,17 @@
-# The four free-tier gates — and why this bundle works at all
+# The free-tier gates — and why this bundle works at all
 
 OpenCode's free tier (`Authorization: Bearer public`) is gated on the server
 side. A third-party gateway is refused with `403 FreeTierError` unless it
 reproduces a specific client fingerprint. This is the single most important
 piece of knowledge in this repository, so it is documented here rather than
 buried in an issue tracker.
+
+There are four such gates, and they are all about the **shape of one request**.
+They are not the whole story: quota is a separate axis with its own failure
+mode, covered under [Not a gate: the quota axis](#not-a-gate-the-quota-axis)
+below. Confusing the two is the most common misdiagnosis — a caller can satisfy
+every gate in this document perfectly and still be refused, with a different
+status code, for an unrelated reason.
 
 Everything below is sourced from public, live-verified reports:
 
@@ -79,6 +86,73 @@ upstream and reassembling the response.
 
 ---
 
+## Proving the four gates yourself
+
+Every claim above is one field away from its counterfactual, so the four can be
+isolated mechanically rather than argued:
+
+```bash
+./scripts/gate-probe.py                                  # this host's own egress
+./scripts/gate-probe.py --proxy http://127.0.0.1:18090   # through one pool node
+```
+
+It sends one baseline that must be accepted and five probes that each break
+exactly one gate and must be refused. It needs no stack running — it talks to
+`opencode.ai` directly, which is the point: it tells you whether upstream moved,
+independently of anything this repository builds.
+
+The self-check is the part that matters. A 200 proves nothing unless the same
+harness can also produce a 403, so the run reports `6/6 probes matched their
+expected status` and fails otherwise. A baseline that is itself refused is
+reported separately and exits `2`, because a run where everything is `403`
+demonstrates nothing — that is what an upstream change looks like, and it must
+not be mistaken for four healthy gates.
+
+Verified 2026-10-16, `6/6`, identical from the host's direct egress and through
+two pool nodes.
+
+---
+
+## Not a gate: the quota axis
+
+The four gates above decide whether a request is *admitted*. Separately, the
+free tier meters usage, and when an address runs out the refusal is a different
+status code with a different name:
+
+| | Did the request run? | Status | Type |
+|---|---|---|---|
+| Shape gates 1–4 | no — refused before execution | `403` | `FreeTierError` |
+| Quota axis | yes — it ran, the budget was spent | `429` | `FreeUsageLimitError` |
+
+A caller can satisfy all four gates perfectly, send a textbook request, and
+still get a `429`. That is not a gate failure and nothing about the fingerprint
+will fix it.
+
+**What is measured here.** Six nodes were serving three distinct source
+addresses. Five nodes shared one address, so five nodes drew on one budget.
+Widening the pool to six distinct addresses removed those 429s, with the
+identity and request shape held constant across the change — which rules out
+the fingerprint and points at the address as the variable.
+
+**What is inferred, not measured.** That upstream's counter actually keys on
+the source address. No controlled A/B was run here: two addresses, identical
+request streams, watching each start returning 429. The observation is
+consistent with per-address bucketing and hard to explain otherwise, since the
+pool widened throughput with nothing else changed — but it is a strong
+inference from one system, not a measurement of upstream's accounting.
+
+**How to falsify it.** Send a fixed request stream through two nodes and record
+when each begins returning 429. Per-address bucketing predicts the two curves
+starting at different times. A global or per-key cap predicts them starting
+together. That experiment is cheap; it simply has not been done, so treat the
+claim accordingly when you rely on it.
+
+This axis is what the proxy pool exists for. It is also why the pool refuses to
+pretend: `ofu-dedupe` measures real egress so that six nodes are not quietly
+serving as three.
+
+---
+
 ## What this bundle does about it
 
 The engine, `ghcr.io/jasonxu114514/opencode2api`, implements all four:
@@ -111,11 +185,16 @@ and ≈2026-10-13). When requests start failing with `403 FreeTierError`, or wit
 
 1. `docker logs ofu-engine | grep -iE '403|FreeTierError|426'`
 2. `./scripts/smoke.sh` — does the zero-tool shape still pass?
-3. Bump the engine: `stack/generate-compose.py` pins `v1.4.0`; check
+3. `./scripts/gate-probe.py` — which gate moved? Independent of the stack, and
+   it distinguishes "gate 3 changed" from "this host is being refused".
+4. Bump the engine: `stack/generate-compose.py` pins `v1.4.0`; check
    [opencode2api releases](https://github.com/jasonxu114514/opencode2api/releases)
    for a newer tag, edit `ENGINE_IMAGE`, then `docker compose up -d --build`
-4. Compare against the linked upstream issues — the bisection method in
+5. Compare against the linked upstream issues — the bisection method in
    #4101 (hold everything constant, vary one field) is what found gates 3–4.
+
+A `429 FreeUsageLimitError` skips all of this. That is the quota axis above, and
+none of these steps will move it.
 
 ## Related upstream state (as of 2026-10-16)
 
@@ -124,9 +203,18 @@ and ≈2026-10-13). When requests start failing with `403 FreeTierError`, or wit
   descending-identifier sessions). The maintainer reports cross-host probes in
   #16328 still receive 403 with valid sessions, so it is **not** resolved yet;
   latest release v3.8.51 predates it.
+- **#16328 has an open question this repository can partially answer.** Several
+  operators there suspect the residual refusal is *egress reputation* rather
+  than request shape. As of 2026-10-16 the baseline shape succeeds from three
+  distinct Cloudflare source addresses on this host, so it is not a uniform
+  Cloudflare block. That does **not** rule reputation bucketing out — all three
+  are Cloudflare addresses, and no residential egress was available to test
+  with. What it does establish is that the refusal is not universal, which the
+  reports from blocked hosts could not show on their own.
 - **9router** has the equivalent fix in flight (#4105, #4132) and a standing
   request for native proxy-pool rotation in
   [#3354](https://github.com/decolua/9router/issues/3354) — the exact problem
   this bundle's WARP pool works around today.
 - When either lands, this bundle remains useful for **quota headroom** (more
   egress buckets), not for compatibility.
+
