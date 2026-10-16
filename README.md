@@ -9,7 +9,7 @@ session.
 
 **Does**
 - Serves OpenCode's anonymous free-tier models through an OpenAI-compatible API,
-  with **no key and no cost** — ten at the time of writing, listed in
+  with **no key and no cost** — twelve at the time of writing, listed in
   [OpenCode CLI](#opencode-cli) below.
 - Reproduces the complete client fingerprint the free tier gates on — including
   the two most people miss: a tool named exactly `read`, and forced
@@ -99,7 +99,7 @@ OmniRoute ────┘   (identity + retry)      http://127.0.0.1:18091 ─�
 
 ## Measured results (this repo, 2026-10-15, 6 nodes)
 
-- `/v1/models` → the live free catalogue (10 models on 2026-10-16). The count is
+- `/v1/models` → the live free catalogue (12 models on 2026-10-16). The count is
   upstream's to change; query the endpoint rather than trusting any number
   written here.
 - `23*17` → `391` via CLI (`opencode run`), via 9router (`oc2/*`), and via OmniRoute (`9r/snowbuddy-free`).
@@ -206,9 +206,11 @@ followed by a restart is silently discarded.
       },
       "models": {
         "space-bunny-free": {},
+        "beam-free": {},
         "big-pickle": {},
-        "cat-jam-free": {},
         "deepseek-v4.1-flash-free": {},
+        "glm-5.3-flash-free": {},
+        "ll-alpha-free": {},
         "longcat-2.5-preview-free": {},
         "mimo-v2.6-flash-free": {},
         "muse-spark-1.2-contributor-free": {},
@@ -236,17 +238,29 @@ any more, and no configuration will bring it back. Listing them explicitly is
 only so the model picker is populated at startup — it is not a filter, and a
 name in that block that upstream has retired will simply fail to resolve.
 
-Ten models are currently served, and those ten are all of them at the last
-check. `space-bunny-free` is the default above for one measured reason: it
-reports `reasoning_tokens: 0`, so a tight `max_tokens` budget goes to the answer
-instead of to thinking. That is a property worth having whichever you pick.
+Twelve models were served at the last check. That number is a snapshot and the
+tier moves under you: `cat-jam-free` was retired and `beam-free` appeared on the
+same afternoon, with no announcement. Treat `/v1/models` as the truth and this
+list as a convenience.
 
-I cannot tell you how the other nine behave on multi-turn. Three have been
-probed. `cat-jam-free` has a conversion bug on multi-turn, `big-pickle` spends
-the budget on reasoning tokens, and `space-bunny-free` does neither. **The other
-seven are untested**, so "default" here means a safe starting point and not a
-ranking. Nothing in this repository tells you which model is best, and if you
-find that out it would be worth writing up.
+`space-bunny-free` is the default above for one measured reason: it reports
+`reasoning_tokens: 0`, so a tight `max_tokens` budget goes to the answer instead
+of to thinking. That is a property worth having whichever you pick.
+
+What I have actually measured, on the anonymous path only:
+
+| | single turn | multi-turn |
+|---|---|---|
+| All twelve | answered | — |
+| `space-bunny-free` | yes | yes, correct |
+| `ll-alpha-free` | yes | yes, but only at `max_tokens` ≥ 300 |
+| `glm-5.3-flash-free` | yes | one correct answer, then `429`, then `502` on every node |
+| `big-pickle` | yes | spends the budget on reasoning |
+| `beam-free` | yes | not tested; reasoning model, see Troubleshooting |
+
+The remaining eight are untested on multi-turn, so "default" here means a safe
+starting point and not a ranking. Nothing in this repository tells you which
+model is best, and if you find that out it would be worth writing up.
 
 ```bash
 opencode run "23*17 ?"
@@ -353,8 +367,8 @@ configured retries.
 | `SSL_ERROR_RX_RECORD_TOO_LONG` in the browser | You are on `https://` and/or `localhost`. Use `http://127.0.0.1:8081`. |
 | `FreeTierError` (403) | Check the **message**, not just the type — at least four different causes share it. `can only be used from within OpenCode` is a gate and `./scripts/gate-probe.py` says which one. `not available in your country` is a region block that no header fixes. See [the gates doc](docs/free-tier-gates.md#not-a-gate-the-region-block). |
 | `FreeUsageLimitError` (429) | Not a gate. The address ran out of budget — nothing in the fingerprint will fix it. See [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis). Widen the pool or wait. |
-| `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine for some models (`cat-jam-free` observed). Use `space-bunny-free` for multi-turn, or disable the reasoning field client-side. |
-| A reasoning model returns **HTTP 200 with empty content** | The budget went to reasoning tokens, not the answer. `big-pickle` spent 55 of 60 tokens on reasoning across 4 of 6 probes and returned nothing; at `max_tokens: 200` it was 0 of 4. Raise `max_tokens`, or pick a model that does not think aloud (`space-bunny-free` reports `reasoning_tokens: 0`). This is not a gateway fault — the request succeeded. |
+| `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine on reasoning models. It was observed on `cat-jam-free`, which has since been retired off the tier, so the model that triggered it is gone but the class of model is not: `ll-alpha-free` and `beam-free` both reason today. I have not seen this 400 reproduce on them, so treat it as a watch item rather than a known outcome. Use `space-bunny-free` for multi-turn, or disable the reasoning field client-side. |
+| A reasoning model returns **HTTP 200 with empty content** | The budget went to reasoning, not the answer. This is not a gateway fault — the request succeeded. `big-pickle` spent 55 of 60 tokens on reasoning across 4 of 6 probes and returned nothing; at `max_tokens: 200` it was 0 of 4. `ll-alpha-free` on multi-turn returned 200 with empty content at `max_tokens: 120`, and the correct answer at 300. `beam-free` reasons as well. The reasoning tokens are not hidden: `/v1/messages` returns them as explicit `thinking` blocks and `/v1/responses` reports `incomplete_details`. Raise `max_tokens`, or pick a model that does not think aloud (`space-bunny-free` reports `reasoning_tokens: 0`). |
 | Node restarts in a loop, `bind: address already in use` | Something else holds 8080/8081. The engine uses host networking; free the ports. |
 
 ## Legal and terms of service
