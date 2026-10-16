@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: The upstream gates changed, or a request is refused
+    url: https://github.com/ebouther/opencode-unlimited-proxy/issues/new?template=gate_observation.md
+    about: >
+      Structured observations are how the documented gates stay honest. Use
+      this rather than a bug report when the gateway answers 403 for a request
+      that looks correct to you.
+  - name: Cloudflare WARP terms of service
+    url: https://www.cloudflare.com/application/terms/
+    about: >
+      Must be accepted before the default pool will run. This project does not
+      answer questions about what they permit.

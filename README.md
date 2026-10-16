@@ -441,18 +441,25 @@ scripts/smoke.sh         one-command verification (needs the stack running)
 scripts/gate-probe.py    isolates each upstream gate; needs no stack running
 tests/                   unit tests, standard library only
 docs/free-tier-gates.md  the four upstream gates, plus the quota axis
+docs/gate-timeline.md    dated record of the gates moving, and what it cost
 NOTICE                   third-party attribution
 ```
 
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 67 tests, no dependencies, no stack
+python3 -m unittest discover -s tests -v   # 85 tests, no dependencies, no stack
 ```
 
-The tests cover the pool generator and the de-duplicator's decision logic — the
-two pieces where a silent mistake costs you a pool. Neither needs Docker,
-network, or a running stack.
+The tests cover the pool generator, the de-duplicator's decision logic, and the
+shipped configuration — the three places where a silent mistake costs you a pool
+or exposes something you did not mean to. None of them need Docker, network, or
+a running stack.
+
+Contributions are welcome; [`CONTRIBUTING.md`](CONTRIBUTING.md) explains the
+conventions and, more importantly, how to tell a measured claim from an inferred
+one. [`SECURITY.md`](SECURITY.md) covers the threat model, which is short: this
+is a local single-user gateway and both listeners bind loopback by default.
 
 CI runs the tests, byte-compiles every Python file, parses and shellchecks every
 shell script, validates the compose file, and asserts that `docker-compose.yml`
