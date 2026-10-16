@@ -165,14 +165,23 @@ Endpoints once it is up:
 > cached an HTTPS upgrade for `localhost` will fail with
 > `SSL_ERROR_RX_RECORD_TOO_LONG` against a plaintext port.
 
-**Before this host is reachable by anything but you**, change the dashboard
-credentials *and* the API key. As shipped, `stack/config.json` carries the
-upstream defaults — `admin` / `changeme-changeme` for the dashboard, and
-`server_keys: ["local-test-key"]` for the API — and the dashboard binds
-`0.0.0.0:8081`, so it will listen on every interface. The API key is what stops
-unbilled traffic; the dashboard is the admin surface. Set both in
-`stack/config.json`, then `docker compose up -d` (`config-init` re-seeds the
-volume from that file on every start).
+**Both listeners bind to `127.0.0.1` by default**, which is every documented use
+of this stack. To reach it from another machine, put it behind your own TLS
+terminator or a VPN rather than widening the bind: the API is anonymous by
+design (`anonymous: true`, see above), so anything that can reach `:8080` can
+spend your quota.
+
+Two defaults in `stack/config.json` are the upstream's and are meant to be
+changed before this is exposed anywhere:
+
+| Setting | Shipped value | Why it matters |
+|---|---|---|
+| `server_keys` | `["local-test-key"]` | The only thing stopping unbilled traffic |
+| `webui.username` / `webui.password` | `admin` / `changeme-changeme` | The dashboard is the admin surface |
+
+Set both in `stack/config.json`, then `docker compose up -d` — `config-init`
+re-seeds the volume from that file on every start, so an edit that is not
+followed by a restart is silently discarded.
 
 ## Point your tools at it
 
