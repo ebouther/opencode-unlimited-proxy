@@ -106,10 +106,44 @@ harness can also produce a 403, so the run reports `6/6 probes matched their
 expected status` and fails otherwise. A baseline that is itself refused is
 reported separately and exits `2`, because a run where everything is `403`
 demonstrates nothing — that is what an upstream change looks like, and it must
-not be mistaken for four healthy gates.
+not be mistaken for four healthy gates. A refusal whose message identifies it as
+a region block, an exhausted quota, an auth failure or a stale client exits `3`
+instead, because those are not gate movement and no header change will help.
 
 Verified 2026-10-16, `6/6`, identical from the host's direct egress and through
 two pool nodes.
+
+Exits `0` when the gates hold, `2` when the baseline itself is refused for an
+unrecognised reason, and **`3` when the refusal is a region block, an exhausted
+quota, an auth failure or a stale client** — that is, when the answer is "not a
+gate". The distinction matters: telling someone in a blocked region that
+upstream may have moved sends them to rewrite headers that were never the
+problem.
+
+---
+
+## Not a gate: the region block
+
+**`403 FreeTierError` is not one failure.** At least four unrelated causes share
+the status code and the `FreeTierError` type. Only the *message* separates them,
+and only the message tells you what to do next:
+
+| Message contains | Actually | Fixable by request shape? |
+|---|---|---|
+| `can only be used from within OpenCode` | the four gates, below | yes |
+| `not available in your country` | region block | **no** |
+| `FreeUsageLimitError` / usage limit | quota axis, below | no — it is per source address |
+| `Upgrade Required` | stale client fingerprint | by bumping the client |
+| `Authentication required` | a credential problem | by fixing the key |
+
+If your error is `not available in your country`, nothing in this document
+applies and no header will change it. `gate-probe.py` says so explicitly and
+exits `3` rather than reporting a gate change.
+
+**The region variant is reported, not reproduced here.** It is documented from
+operator reports (see the upstream-state notes at the end of this file); every
+refusal observed from this host has been the `within OpenCode` variant. Treat
+the geo row as reported rather than measured.
 
 ---
 

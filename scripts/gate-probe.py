@@ -38,6 +38,50 @@ UPSTREAM = "https://opencode.ai/zen/v1/chat/completions"
 QUARTET = ("bash", "glob", "grep", "read")
 BASE62 = string.ascii_letters + string.digits
 
+# The status code alone cannot tell you what to do. `403 FreeTierError` is
+# returned for at least three unrelated reasons, and only one of them is the
+# request-shape gate this repository documents. Quoting the message is the
+# difference between "my headers are wrong" and "no header will ever work from
+# here". Reported, not reproduced: the geo variant is documented from operator
+# reports, and has never been observed from this host.
+REFUSALS = (
+    ("geo", ("not available in your country",),
+     "region block -- no request shape will fix this from here"),
+    ("shape", ("within opencode",),
+     "request-shape gate -- this is the gate docs/free-tier-gates.md documents"),
+    ("quota", ("freeusagelimiterror", "usage limit", "rate limit"),
+     "quota exhausted for this source address -- this is the quota axis, not a gate"),
+    ("auth", ("authentication", "unauthorized", "api key"),
+     "credential problem, not the free tier"),
+    ("version", ("upgrade required",),
+     "stale client -- upstream wants a newer fingerprint"),
+)
+
+def classify(status, raw) -> tuple[str, str, str]:
+    """Return (kind, message, what_to_do) for a refusal body.
+
+    kind is "ok", "unknown" or one of the REFUSALS keys. Matching is on the
+    message, not the error type: every shape-gate refusal is typed
+    `FreeTierError`, exactly like the geo and quota refusals.
+    """
+    text = (raw or "").strip()
+    try:
+        parsed = json.loads(text)
+        message = parsed.get("error", {}).get("message", "") or parsed.get("message", "")
+        kind_hint = parsed.get("error", {}).get("type", "")
+    except ValueError:
+        # An SSE frame or a non-JSON error page; the message is still in there.
+        message = text
+        kind_hint = ""
+    lowered = f"{kind_hint} {message} {text[:400]}".lower()
+    for kind, needles, advice in REFUSALS:
+        if any(needle in lowered for needle in needles):
+            return kind, (message or kind_hint or text[:120]), advice
+    if str(status) == "200":
+        return "ok", "", ""
+    return "unknown", (message or kind_hint or text[:120]), \
+        "unrecognised refusal -- upstream may have moved; treat the docs as out of date"
+
 def canonical_id(prefix: str, counter: int = 1) -> str:
     """OpenCode CLI ``Identifier.descending()``: ~(unix_ms << 12 | counter) -> 6 bytes -> 12 hex.
 
@@ -141,23 +185,44 @@ def main() -> int:
     for probe in build_probes(args):
         status, raw, elapsed = probe.fire(opener, args.timeout)
         got = str(status)
-        results.append((probe, got))
+        kind, message, advice = classify(status, raw)
+        results.append((probe, got, kind, message, advice))
         mark = "ok  " if got == probe.expect else "FAIL"
         print(f"[{mark}] {probe.name:<30} HTTP {status:<5} expected {probe.expect:<4} ({elapsed:.1f}s)"
               f"  [{probe.gate}]")
-        print(f"        {raw.strip()[:150]}")
+        if kind not in ("ok", "shape"):
+            # Only annotate the refusals that are *not* the documented gate.
+            # A shape refusal on a negative control is the expected result and
+            # does not need narrating on every line.
+            print(f"        -> {kind}: {advice}")
+            print(f"        -> {message[:140]}")
+        else:
+            print(f"        {raw.strip()[:150]}")
 
     print()
-    expected = {p.name: p.expect for p, _ in results}
-    ok = sum(1 for p, got in results if expected[p.name] == got)
+    expected = {p.name: p.expect for p, *_ in results}
+    ok = sum(1 for p, got, *_ in results if expected[p.name] == got)
     total = len(results)
+    baseline = next((r for r in results if r[0].gate == "-"), None)
 
     print(f"self-check: {ok}/{total} probes matched their expected status")
 
-    if not any(p.gate == "-" and expected[p.name] == got for p, got in results):
-        print("\nBASELINE REFUSED. A run where everything 403s demonstrates nothing --\n"
-              "upstream may have moved. Re-run docs/free-tier-gates.md step 2 before\n"
-              "reading anything into the negative controls.")
+    if baseline and expected[baseline[0].name] != baseline[1]:
+        kind, message, advice = baseline[2], baseline[3], baseline[4]
+        print(f"\nBASELINE REFUSED ({kind}).")
+        print(f"  {message[:160]}")
+        print(f"  {advice}")
+        if kind in ("geo", "quota", "auth", "version"):
+            # These are not gate movement. Telling someone in a blocked region
+            # that "upstream may have moved" sends them to debug headers that
+            # were never the problem.
+            print("\n  This is NOT the request-shape gate, so no header change will\n"
+                  "  help. The negative controls above prove nothing either -- a run\n"
+                  "  where every probe is refused demonstrates no gate state.")
+            return 3
+        print("\n  A run where everything is refused demonstrates nothing. Re-run\n"
+              "  docs/free-tier-gates.md step 2 before reading anything into the\n"
+              "  negative controls.")
         return 2
     if ok != total:
         print("\nOne or more gates no longer behave as documented. Treat\n"

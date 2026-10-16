@@ -348,7 +348,7 @@ configured retries.
 | Edits to `stack/config.json` seem ignored | The engine reads `/var/lib/opencode2api/config.json` from its **named volume** and prefers it over your file. `config-init` re-seeds it on `docker compose up -d`; to force it: `docker compose down && docker volume rm stack_ofu-engine && docker compose up -d`. |
 | `rename … device or resource busy` at startup | You bind-mounted the config path directly; it must be seeded by `config-init` instead. |
 | `SSL_ERROR_RX_RECORD_TOO_LONG` in the browser | You are on `https://` and/or `localhost`. Use `http://127.0.0.1:8081`. |
-| `FreeTierError` (403) | A gate is unsatisfied, or upstream moved. `./scripts/gate-probe.py` says which gate, without involving this stack. |
+| `FreeTierError` (403) | Check the **message**, not just the type — at least four different causes share it. `can only be used from within OpenCode` is a gate and `./scripts/gate-probe.py` says which one. `not available in your country` is a region block that no header fixes. See [the gates doc](docs/free-tier-gates.md#not-a-gate-the-region-block). |
 | `FreeUsageLimitError` (429) | Not a gate. The address ran out of budget — nothing in the fingerprint will fix it. See [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis). Widen the pool or wait. |
 | `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine for some models (`cat-jam-free` observed). Use `space-bunny-free` for multi-turn, or disable the reasoning field client-side. |
 | A reasoning model returns **HTTP 200 with empty content** | The budget went to reasoning tokens, not the answer. `big-pickle` spent 55 of 60 tokens on reasoning across 4 of 6 probes and returned nothing; at `max_tokens: 200` it was 0 of 4. Raise `max_tokens`, or pick a model that does not think aloud (`space-bunny-free` reports `reasoning_tokens: 0`). This is not a gateway fault — the request succeeded. |
@@ -458,7 +458,7 @@ NOTICE                   third-party attribution
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 88 tests, no dependencies, no stack
+python3 -m unittest discover -s tests -v   # 103 tests, no dependencies, no stack
 ```
 
 The tests cover the pool generator, the de-duplicator's decision logic, and the

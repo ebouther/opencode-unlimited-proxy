@@ -7,7 +7,7 @@ works".
 ## Run the checks
 
 ```bash
-python3 -m unittest discover -s tests -v   # 88 tests, stdlib only, no Docker
+python3 -m unittest discover -s tests -v   # 103 tests, stdlib only, no Docker
 ./scripts/smoke.sh                         # needs the stack running
 ```
 
