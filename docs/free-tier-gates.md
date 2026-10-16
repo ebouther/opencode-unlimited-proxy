@@ -211,6 +211,16 @@ none of these steps will move it.
   are Cloudflare addresses, and no residential egress was available to test
   with. What it does establish is that the refusal is not universal, which the
   reports from blocked hosts could not show on their own.
+- **The refusal appears to vary over time on a fixed egress, which is harder to
+  explain than static reputation.** In #16328 on 2026-10-14 an operator reported
+  that the exact probes which had returned `200` earlier the same day were being
+  refused again, from the same host, with session value held constant. If that
+  holds, then the blocked hosts are not permanently blocked and the gate is not
+  a property of their address alone. **This is reported, not reproduced here** —
+  it comes from someone else's host, and a single uncontrolled day of probing
+  cannot separate "the upstream changed" from "that egress's reputation
+  changed" from "my measurement drifted". It is worth repeating: re-run
+  `scripts/gate-probe.py` before and after a long idle period.
 - **9router** has the equivalent fix in flight (#4105, #4132) and a standing
   request for native proxy-pool rotation in
   [#3354](https://github.com/decolua/9router/issues/3354) — the exact problem

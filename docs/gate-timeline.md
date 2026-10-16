@@ -97,6 +97,12 @@ Two independent confirmations on this date:
 - **Upstream state cited elsewhere goes stale.** The note about OmniRoute #16598
   and release v3.8.51 in `free-tier-gates.md` was true on 2026-10-16 and may not
   be now.
+- **The time-varying refusal is somebody else's observation.** The entry for
+  2026-10-14 above reports a probe set that stopped working mid-day on a fixed
+  egress. It has not been reproduced from this host, and one uncontrolled run
+  cannot separate an upstream change from a reputation change from measurement
+  drift. It is the most promising thing to test properly: `gate-probe.py`
+  exits `2` when the baseline is refused, so it doubles as an alarm.
 
 ---
 
