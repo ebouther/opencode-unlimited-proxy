@@ -240,10 +240,17 @@ any more, and no configuration will bring it back. Listing them explicitly is
 only so the model picker is populated at startup — it is not a filter, and a
 name in that block that upstream has retired will simply fail to resolve.
 
-Ten models are currently served. `space-bunny-free` is the default above
-because it is the one verified for sustained multi-turn sessions; see the
-`cat-jam-free` note in [Troubleshooting](#troubleshooting) before making it your
-default.
+Ten models are currently served, and those ten are all of them at the last
+check. `space-bunny-free` is the default above for one measured reason: it
+reports `reasoning_tokens: 0`, so a tight `max_tokens` budget goes to the answer
+instead of to thinking. That is a property worth having whichever you pick.
+
+I cannot tell you how the other nine behave on multi-turn. Three have been
+probed. `cat-jam-free` has a conversion bug on multi-turn, `big-pickle` spends
+the budget on reasoning tokens, and `space-bunny-free` does neither. **The other
+seven are untested**, so "default" here means a safe starting point and not a
+ranking. Nothing in this repository tells you which model is best, and if you
+find that out it would be worth writing up.
 
 ```bash
 opencode run "23*17 ?"
