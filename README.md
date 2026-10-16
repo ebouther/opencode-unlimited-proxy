@@ -1,9 +1,64 @@
+<p align="center">
+  <img src="docs/media/demo.gif" alt="A direct call to the OpenCode free tier is refused with 403 FreeTierError; the same request through this local gateway answers 391" width="820">
+</p>
+
 # opencode-unlimited-proxy
 
-A self-hosted, **zero-cost** OpenAI-compatible gateway for the OpenCode **free
-tier** (no API key, no spend), fronted by a pool of rotating egress addresses so
-a single IP quota is not the only thing standing between you and a working
-session.
+<p align="center">A self-hosted, <strong>zero-cost</strong> OpenAI-compatible gateway for the OpenCode <strong>free tier</strong>, fronted by rotating egress addresses. No API key, no spend.</p>
+
+<p align="center">
+  <a href="actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ebouther/opencode-unlimited-proxy/ci.yml?branch=main&label=CI"></a>
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/github/license/ebouther/opencode-unlimited-proxy"></a>
+</p>
+
+Both halves of that recording are real, not a mockup. The top command goes
+straight to `opencode.ai/zen/v1` and gets the refusal the free tier hands out by
+default. The bottom one goes through this gateway and gets an answer, with no
+upstream API key configured anywhere in it. What the gateway removes is the
+refusal. What the rotating pool removes is the per-address quota ceiling, which
+is a separate problem and a separate cause.
+
+## Get it running
+
+> **Linux only.** The rotating pool needs privileged containers and
+> `/dev/net/tun`, which Docker Desktop on macOS and Windows does not provide.
+> There is no macOS or Windows path in this repository today.
+> [What that rules out, and what it does not](#on-macos-or-windows).
+
+```bash
+git clone https://github.com/ebouther/opencode-unlimited-proxy.git
+cd opencode-unlimited-proxy/stack
+
+# Cloudflare's terms have to be accepted explicitly before the WARP nodes start.
+# Read them first: https://www.cloudflare.com/application/terms/
+cp .env.example .env && sed -i 's/WARP_ACCEPT_TOS=0/WARP_ACCEPT_TOS=1' .env
+
+docker compose up -d --build
+```
+
+Linux, Docker Compose v2, privileged containers, roughly 150 MB per node. The
+first `up` builds the WARP and tinyproxy images, so give it a few minutes.
+
+| What | Where |
+|---|---|
+| OpenAI-compatible API | `http://127.0.0.1:8080/v1` |
+| Web dashboard | `http://127.0.0.1:8081` (`admin` / `changeme-changeme` — [change it](SECURITY.md)) |
+| Proxy pool | `127.0.0.1:18090` … `18090 + nodes - 1` |
+
+Then point a client at it. One entry each, written out in full
+[below](#point-your-tools-at-it):
+
+| Client | What to enter |
+|---|---|
+| OpenCode CLI | a provider on `http://127.0.0.1:8080/v1`, key `local-test-key` |
+| 9router | OpenAI-compatible node, base `http://127.0.0.1:8080/v1`, key `local-test-key`, prefix `oc2`, **API type `chat`** |
+| OmniRoute | OpenAI-compatible node on `http://127.0.0.1:8080/v1`, then `<prefix>/<model>` from a combo |
+
+Two ways to narrow that down before committing to any of it: the
+[60-second probe](#check-the-claim-in-60-seconds-install-nothing) tests the
+upstream claim with no Docker at all, and if you already have proxies,
+[two services are enough](#variations-verification-and-defaults) — no WARP, no
+Cloudflare terms.
 
 ## What this does, and what it does not
 
@@ -112,28 +167,93 @@ capacity guarantee.
 
 ---
 
+## Check the claim in 60 seconds, install nothing
+
+The cheapest way to find out whether this repository is telling the truth is to
+ask upstream directly. No Docker, no WARP, no terms to accept, nothing left
+running afterwards:
+
+```bash
+git clone https://github.com/ebouther/opencode-unlimited-proxy.git
+cd opencode-unlimited-proxy
+./scripts/gate-probe.py
+```
+
+That is the load-bearing half of the whole bundle — the conditions the free
+tier refuses requests without, each probed in isolation. The run is paired with
+controls: shapes that must be refused, and one that must be accepted. It exits
+non-zero rather than reporting anything if the baseline itself is refused.
+
+That is not ceremony. A run where every probe comes back 403 proves nothing,
+and a probe that cannot tell you that is worse than no probe.
+
+If the baseline comes back `429` where it expects `200`, that is your address's
+quota, not a gate and not a broken install. Wait, or send the probe through one
+of the nodes once the pool is up:
+
+```bash
+./scripts/gate-probe.py --proxy http://127.0.0.1:18090
+```
+
+If that passes and you want the rotating pool behind it, carry on.
+
 ## Requirements
 
-- **Linux** (needs `/dev/net/tun`; WARP does not work in a Windows/macOS Docker VM).
+- **Linux** (native). The WARP nodes create a TUN device and route through it, so
+  each one needs `/dev/net/tun` plus `privileged` and `NET_ADMIN`. Docker Desktop
+  on macOS and Windows runs its containers in a Linux VM that does not hand those
+  out the way a Linux host does, and WARP will not come up without them.
 - **Docker Engine** + **Docker Compose v2** (`docker compose`, not `docker-compose`).
 - Privileged containers are required: WARP creates a TUN device and routes
   through it, so each node runs `privileged` + `NET_ADMIN`.
 - ~150 MB RAM per node and outbound TCP 443/7844 to Cloudflare.
 
-## Quick start
+## On macOS or Windows
+
+There is no supported path today. This section says exactly what stops it,
+rather than suggesting something that will fail on you.
+
+Two pieces of the default stack are Linux-only:
+
+- **The WARP nodes.** Each one creates a TUN device and routes through it, which
+  needs `/dev/net/tun` and privileged containers.
+- **The engine's route to the pool.** It runs with `network_mode: host` so that
+  `http://127.0.0.1:18090` resolves to a published proxy port. On Docker Desktop
+  that host namespace belongs to the VM, so anything listening on *your*
+  `127.0.0.1` is not on the engine's `127.0.0.1`.
+
+The engine image itself is not the problem: it is published for both `amd64`
+and `arm64`, so it runs natively on Apple Silicon. What does not work is how this
+stack reaches the internet, not the gateway in the middle.
+
+**If you want to close the gap**, the piece to rewrite is the network path, not
+the engine. Putting the engine on an ordinary bridge network, addressing the pool
+by service name instead of `127.0.0.1`, and listening on `0.0.0.0` inside the
+container while publishing to `127.0.0.1` on the host: that configuration was
+built and measured end to end on Linux, answering correctly through the pool with
+the loopback-only binding preserved. It has never been run on Docker Desktop, and
+that is the honest gap.
+
+Until someone runs it there, your realistic options are a Linux host, or a remote
+proxy reachable by hostname — `proxies` accepts any URL, so
+`http://user:pass@your-proxy:3128` is a valid entry. That path is untested here,
+so treat it as a lead rather than a recipe.
+
+## Variations, verification and defaults
+
+The four commands in [get it running](#get-it-running) bring up the default
+six-node pool. This section is everything that varies from that.
+
+**A different pool size**, before the first start:
 
 ```bash
-git clone <this-repo> && cd opencode-unlimited-proxy/stack
-
-# optional: edit the pool size before the first start
 python3 generate-compose.py --nodes 6
-
-# The WARP nodes need the Cloudflare terms of service to be accepted explicitly.
-# Read them first: https://www.cloudflare.com/application/terms/
-cp .env.example .env && sed -i 's/WARP_ACCEPT_TOS=0/WARP_ACCEPT_TOS=1/' .env
-
-docker compose up -d --build      # first run builds the WARP + tinyproxy images
 ```
+
+`docker-compose.yml` is generated and CI checks it against
+`generate-compose.py`, so editing that file by hand will fail the
+`generated files are in sync` job. Change the generator, not the output, and
+start only the services you need rather than deleting them.
 
 Already have your own proxies? Skip the WARP nodes entirely: put them in the
 `proxies` array of `config.json`, then start only the two services that do not
@@ -144,9 +264,7 @@ docker compose up -d config-init opencode-engine
 ```
 
 No WARP, no `tinyproxy`, no `ofu-dedupe`, and you never touch Cloudflare's
-terms. (`docker-compose.yml` is generated and CI checks it against
-`generate-compose.py`, so deleting services from it by hand will fail the
-`generated files are in sync` job. Start the services you need instead.)
+terms.
 
 Then verify:
 
@@ -154,21 +272,21 @@ Then verify:
 ../scripts/smoke.sh
 ```
 
-`smoke.sh` checks the bundle end to end. To check *upstream* — whether the
+`smoke.sh` checks the bundle end to end and exits non-zero if anything is off. A
+drained node is not a fault: `ofu-dedupe` drains the surplus when WARP cannot give
+every node its own address, and a drained node stops listening on purpose. So the
+pool shrinks as addresses run out, and `2/2 serving, 4 drained` is a healthy
+result rather than a degraded one. The check that carries the meaning is that
+every node still serving holds a distinct address, since two nodes sharing one
+address share one quota bucket.
+
+To check *upstream* — whether the
 free-tier fingerprint is still what this repository says it is, independently
 of anything running locally:
 
 ```bash
 ../scripts/gate-probe.py          # baseline + controls, see --help
 ```
-
-Endpoints once it is up:
-
-| What | Where |
-|---|---|
-| OpenAI-compatible API | `http://127.0.0.1:8080/v1` |
-| Web dashboard | `http://127.0.0.1:8081` (`admin` / `changeme-changeme` — [change it](SECURITY.md)) |
-| Proxy pool | `127.0.0.1:18090` … `18090 + nodes - 1` |
 
 **Both listeners bind to `127.0.0.1` by default**, which is every documented use
 of this stack. To reach it from another machine, put it behind your own TLS
@@ -223,25 +341,9 @@ followed by a restart is silently discarded.
 }
 ```
 
-**The list above is a snapshot, not a contract.** Upstream adds and retires
-anonymous models, and this repository does not control that. The engine asks
-OpenCode for the live catalogue on every request, so the authoritative answer is
-always:
-
-```bash
-curl -s http://127.0.0.1:8080/v1/models -H "Authorization: Bearer local-test-key" \
-  | python3 -c "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]"
-```
-
-If a model you expect is missing from `/v1/models`, it is not on the free tier
-any more, and no configuration will bring it back. Listing them explicitly is
-only so the model picker is populated at startup — it is not a filter, and a
-name in that block that upstream has retired will simply fail to resolve.
-
-Twelve models were served at the last check. That number is a snapshot and the
-tier moves under you: `cat-jam-free` was retired and `beam-free` appeared on the
-same afternoon, with no announcement. Treat `/v1/models` as the truth and this
-list as a convenience.
+**The list above is a snapshot, not a contract.** The engine asks OpenCode for the
+live catalogue on every request, so `/v1/models` is always the authoritative answer.
+See [the model list moves](#the-model-list-moves).
 
 `space-bunny-free` is the default above for one measured reason: it reports
 `reasoning_tokens: 0`, so a tight `max_tokens` budget goes to the answer instead
@@ -268,18 +370,67 @@ opencode run "23*17 ?"
 
 ### 9router
 
-Add an OpenAI-compatible provider node:
+Add an OpenAI-compatible connection:
 
 | Field | Value |
 |---|---|
 | Base URL | `http://127.0.0.1:8080/v1` |
 | API key | `local-test-key` |
-| Model prefix | `oc2` (your choice) |
+| Model prefix | `oc2`, or anything you like |
+| API type | `chat` |
+
+Then reference a model as `<prefix>/<model>`, so `oc2/space-bunny-free`. Measured end
+to end through 9router: HTTP 200, and `23*17 ?` came back `391`.
+
+`API type` is the field lists like this usually skip, and it is not cosmetic. Ten of
+the twelve free models are chat-native, which is what `chat` is for. The two
+`muse-spark-*-contributor-free` models are `responses`-native upstream, so pointing a
+chat-typed route at those is what converts a loud `ModelProtocolUnsupported` refusal
+into a quiet empty answer.
+
+Expect 9router to mark the connection `unavailable` from its own connectivity test.
+That was the state of a working node here: `testStatus: unavailable`, a 403 from
+upstream, and ordinary routed use through the same node working fine. The likely
+reason is that the test request does not carry the client fingerprint the free tier
+gates on. Check it with a real request rather than the test badge:
+
+```bash
+curl -s http://127.0.0.1:3000/v1/chat/completions \
+  -H "Authorization: Bearer <your-9router-key>" -H 'Content-Type: application/json' \
+  -d '{"model":"oc2/space-bunny-free","messages":[{"role":"user","content":"23*17 ? Reply with just the number."}]}'
+```
 
 ### OmniRoute
 
-Add an OpenAI-compatible node pointing at `http://127.0.0.1:8080/v1`, then
-reference it as `<node-prefix>/<model>` from a combo.
+Add an OpenAI-compatible node pointing at `http://127.0.0.1:8080/v1`, with
+`local-test-key` as the key, then reference it as `<node-prefix>/<model>` from a
+combo.
+
+This one is given at the HTTP level only: the base URL, the key and the prefix are
+what the gateway speaks, and they are verified. It has not been clicked through
+OmniRoute's own interface, so treat the field names as the ones to look for rather
+than a screenshot's worth of certainty.
+
+## The model list moves
+
+Every model name in this file is a snapshot, not a contract. Upstream adds and
+retires anonymous models, and this repository does not control that. During the
+last round of work here, `cat-jam-free` was retired and `beam-free` appeared on
+the same afternoon, with no announcement either way.
+
+So treat `/v1/models` as the truth and any list here as a convenience:
+
+```bash
+curl -s http://127.0.0.1:8080/v1/models -H "Authorization: Bearer local-test-key" \
+  | jq -r '.data[].id'
+```
+
+Listing models explicitly in a client config only populates the model picker at
+startup. It is not a filter. A name upstream has retired will fail to resolve, and
+a new one will not appear until you add it yourself.
+
+If a model you expected is gone, the fix is a different name, not a different
+configuration.
 
 ## Scaling the address pool
 
