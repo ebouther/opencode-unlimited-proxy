@@ -87,20 +87,68 @@ the life of the session (it drives prompt-cache affinity), and hex-encode the
 first **6 bytes**, not `subarray(0, 12)` — that is 12 bytes, and interpolating
 a `Buffer` UTF-8-decodes it into mojibake.
 
-## Gate 3 — the tool-signature quartet
+## Gate 3 — a tool named exactly `read`
 
-With `Bearer public`, upstream inspects the tool declarations:
+With `Bearer public`, upstream inspects the tool declarations and looks for
+**one tool whose function name is exactly `read`**. That is the whole rule.
+Measured 2026-10-16, one variable at a time, everything else in the request held
+constant:
 
-- **0–3 tools → 403**
-- the quartet **`bash`, `glob`, `grep`, `read`** → 200 on both
-  `/chat/completions` and `/responses`
-- extra tools alongside the quartet are fine
-- *fake* tool names instead of the quartet → 403
+| Tool declarations sent | Result |
+|---|---|
+| `read` alone | `200` |
+| `read` + 3 invented names | `200` |
+| `read` repeated 4× | `200` |
+| `read`, `write`, `edit`, `bash` | `200` |
+| `bash`, `glob`, `grep`, `read` | `200` |
+| `bash`, `glob`, `grep`, `read` + `todowrite` | `200` |
+| …the quartet + `write` `edit` `patch` `list` (8 total) | `200` |
+| the quartet, with a populated `parameters` schema | `200` |
+| **no `tools` at all** | `403` |
+| `bash`, `glob`, `grep` (3 tools, no `read`) | `403` |
+| `todowrite`, `list`, `patch`, `edit` (4 tools, no `read`) | `403` |
+| `bash` / `glob` / `grep` / `write` alone | `403` each |
+| 4 invented names | `403` |
+| `read_file`, `Read`, `READ`, `readdir`, `reader` | `403` each |
+
+Three consequences that the table settles, each of which used to be a guess:
+
+- **Count is irrelevant.** One tool is enough; four is not needed.
+- **The other names are irrelevant.** `bash`, `glob` and `grep` are not required.
+  They appear in the quartet because they are what the real client ships, not
+  because upstream asks for them.
+- **The match is exact** — case-sensitive, no prefix, no suffix. Renaming a tool
+  to `read_file` does not count.
+
+An earlier revision of this document claimed a *"quartet"* was required and that
+0–3 tools were refused. Both were wrong, and wrong in a way that sent people
+looking for a missing tool list when their real problem was a renamed one. The
+quartic evidence was a single passing configuration, never a one-variable-at-a-
+time comparison; the table above is the latter.
+
+### Why this matters more than a quirk
+
+A server that checks for one specific tool name, out of whatever the caller
+happens to declare, breaks **any agent whose tool set lacks a literal `read`** —
+typically planners, reviewers, routers and other agents that reason about work
+without touching files. The symptom is a first-message, deterministic `403
+FreeTierError` from an unmodified official client, on a model that works under
+a different agent in the same binary. It reads like a quota or a network fault
+and is neither. See [the report](https://github.com/code-yeongyu/oh-my-openagent/issues/8625)
+for a clean instance.
+
+Adding a `read` tool to the agent's declaration list is enough; no tool needs to
+be invoked.
 
 Consequence worth internalising: **a plain chat caller that sends no tools at
 all is refused.** Generic OpenAI-compatible clients (`curl`, most SDKs, simple
 agents) fail by default. This is the most common silent cause of
 `FreeTierError` for newcomers.
+
+One adjacent finding, recorded because it is easy to misread as this gate: a tool
+declared as a bare `{"name": "read"}` with no `parameters` returns **`400`**, not
+`403`. That is a malformed tool specification being rejected, a separate axis
+from the gate, and no amount of shaping the rest of the request will change it.
 
 ## Gate 4 — streaming
 
@@ -126,7 +174,7 @@ exactly one gate and must be refused. It needs no stack running — it talks to
 independently of anything this repository builds.
 
 The self-check is the part that matters. A 200 proves nothing unless the same
-harness can also produce a 403, so the run reports `6/6 probes matched their
+harness can also produce a 403, so the run reports `8/8 probes matched their
 expected status` and fails otherwise. A baseline that is itself refused is
 reported separately and exits `2`, because a run where everything is `403`
 demonstrates nothing — that is what an upstream change looks like, and it must
@@ -134,7 +182,7 @@ not be mistaken for four healthy gates. A refusal whose message identifies it as
 a region block, an exhausted quota, an auth failure or a stale client exits `3`
 instead, because those are not gate movement and no header change will help.
 
-Verified 2026-10-16, `6/6`, identical from the host's direct egress and through
+Verified 2026-10-16, `8/8`, identical from the host's direct egress and through
 two pool nodes.
 
 Exits `0` when the gates hold, `2` when the baseline itself is refused for an
@@ -219,7 +267,7 @@ The engine, `ghcr.io/jasonxu114514/opencode2api`, implements all four:
 |---|---|
 | 1 | Sets a versioned `opencode/<ver>` UA |
 | 2 | `CanonicalSessionID` (v1.3.8+): descending identifier layout, real ids preserved for cache affinity |
-| 3 | Merges the quartet into the outgoing tool list, preserving caller tools verbatim |
+| 3 | Injects a tool named `read` into the outgoing tool list, preserving caller tools verbatim |
 | 4 | Forces `stream: true` upstream, reassembles JSON for non-stream callers |
 
 Verified live against this bundle (2026-10-16), engine v1.4.0:
@@ -228,7 +276,7 @@ Verified live against this bundle (2026-10-16), engine v1.4.0:
 |---|---|
 | 1 message, no `tools`, `stream` omitted | `200`, content returned |
 | 1 message, no `tools`, `"stream": false` | `200`, content returned |
-| 1 fake tool (`totally_fake_tool`), no quartet, `stream: false` | `200`, content returned |
+| 1 fake tool (`totally_fake_tool`), no `read`, `stream: false` | `200`, content returned |
 
 The last two are exactly the shapes that return 403 from a gateway that only
 does gates 1–2. `scripts/smoke.sh` deliberately sends the zero-tool +

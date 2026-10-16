@@ -31,7 +31,7 @@ a `200` gives nothing to grep for.
 
 ---
 
-## ≈2026-10-13 — tool-signature quartet and streaming
+## ≈2026-10-13 — the `read` tool gate and streaming
 
 **Measured, with negative controls.** This change is the one the bisection method
 in upstream #4101 isolated: hold everything constant, vary exactly one field.
@@ -40,8 +40,17 @@ Two gates turned out to be involved:
 
 | Gate | Field varied | Result |
 |---|---|---|
-| 3 | tool signature quartet: absent tools, a changed signature, or the wrong protocol | `403` |
+| 3 | tool declarations: no tools, or a set with no tool named `read` | `403` |
 | 4 | `stream: false` | `403` |
+
+> **Corrected 2026-10-16.** This entry originally read gate 3 as a *"tool
+> signature quartet"* and described the failing shape as "absent tools, a changed
+> signature, or the wrong protocol". A later one-variable-at-a-time pass found
+> the actual rule is narrower and stranger: **one tool named exactly `read`**,
+> with count, other names and schema all irrelevant. The original wording was a
+> single passing configuration generalised into a rule — the failure mode this
+> repository documents elsewhere. Gate 3's real description is in
+> [`free-tier-gates.md`](free-tier-gates.md#gate-3--a-tool-named-exactly-read).
 
 A request that succeeds proves nothing on its own. What identifies a gate is the
 pair — one request that works and one that differs in a single field and does

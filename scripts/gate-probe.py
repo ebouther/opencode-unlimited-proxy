@@ -10,13 +10,14 @@ Why this exists
 docs/free-tier-gates.md states four conditions that the free tier refuses requests
 without. Asserting them is not the same as demonstrating them, and "it worked
 yesterday" does not distinguish "the gate is intact" from "my probe is broken".
-So the baseline probe is paired with four negative controls: shapes that must be
-refused. If any negative control comes back 200, the harness is not measuring
-the gate and the positive results mean nothing. The run also fails if the
-baseline itself is refused, because then a 403 everywhere proves nothing either.
+So the baseline probe is paired with controls: shapes that must be refused, plus
+one that must be *accepted* so a minimum shape is asserted and not just assumed.
+If any refusal control comes back 200, the harness is not measuring the gate and
+the positive results mean nothing. The run also fails if the baseline itself is
+refused, because then a 403 everywhere proves nothing either.
 
 Every probe sends a real request to the free tier and consumes a little of its
-per-address quota. Six probes is a handful of requests.
+per-address quota. Eight probes is a handful of requests.
 
 This script needs no stack running. It talks to opencode.ai directly, so it is
 the check to run when you want to know whether upstream moved, independently of
@@ -35,7 +36,14 @@ import urllib.error
 import urllib.request
 
 UPSTREAM = "https://opencode.ai/zen/v1/chat/completions"
-QUARTET = ("bash", "glob", "grep", "read")
+# What the real client sends. It works, but it is *not* the rule: measured
+# 2026-10-16, gate 3 requires only one tool named exactly `read`, and bash, glob
+# and grep are incidental to passing. Naming this CLIENT_TOOLS rather than
+# QUARTET is deliberate -- the old name was read as the rule and invited the
+# inference that a missing bash would be refused. It would not be.
+CLIENT_TOOLS = ("bash", "glob", "grep", "read")
+READ_ONLY = ("read",)
+NEAR_MISS = ("read_file",)
 BASE62 = string.ascii_letters + string.digits
 
 # The status code alone cannot tell you what to do. `403 FreeTierError` is
@@ -103,7 +111,7 @@ def shaped_session() -> str:
 def b62_suffix() -> str:
     return "".join(random.choice(BASE62) for _ in range(14))
 
-def toolset(names=QUARTET) -> list[dict]:
+def toolset(names=CLIENT_TOOLS) -> list[dict]:
     return [{"type": "function", "function": {"name": n, "description": "t",
               "parameters": {"type": "object", "properties": {}}}} for n in names]
 
@@ -147,19 +155,31 @@ def build_probes(args) -> list[Probe]:
     ua_ok = args.ua
     def baseline():
         return Probe("baseline", "-", "200", ua=ua_ok, session=canonical_id("ses"),
-                     stream=True, tools=QUARTET, model=args.model)
+                     stream=True, tools=CLIENT_TOOLS, model=args.model)
     return [
         baseline(),
         Probe("stream:false", "gate 4", "403", ua=ua_ok, session=canonical_id("ses"),
-              stream=False, tools=QUARTET, model=args.model),
+              stream=False, tools=CLIENT_TOOLS, model=args.model),
         Probe("zero tools", "gate 3", "403", ua=ua_ok, session=canonical_id("ses"),
               stream=True, tools=None, model=args.model),
-        Probe("fake tool names", "gate 3", "403", ua=ua_ok, session=canonical_id("ses"),
-              stream=True, tools=("_noop", "websearch2"), model=args.model),
+        # Expecting 200, so this is the positive half of the claim rather than a
+        # negative control. Without it, "read alone passes" is untested and the
+        # tool count looks load-bearing when it is not.
+        Probe("read alone (minimal)", "gate 3", "200", ua=ua_ok,
+              session=canonical_id("ses"), stream=True, tools=READ_ONLY,
+              model=args.model),
+        # The near miss is the one that actually pins the rule: prefix or suffix
+        # and the tool does not count, so "I renamed it" is not a fix.
+        Probe("near miss: read_file", "gate 3", "403", ua=ua_ok,
+              session=canonical_id("ses"), stream=True, tools=NEAR_MISS,
+              model=args.model),
+        Probe("real names, no read", "gate 3", "403", ua=ua_ok,
+              session=canonical_id("ses"), stream=True,
+              tools=("bash", "glob", "grep"), model=args.model),
         Probe("non-opencode UA", "gate 1", "403", ua="curl/8.0", session=canonical_id("ses"),
-              stream=True, tools=QUARTET, model=args.model),
+              stream=True, tools=CLIENT_TOOLS, model=args.model),
         Probe("shaped but unencoded session", "gate 2", "403", ua=ua_ok, session=shaped_session(),
-              stream=True, tools=QUARTET, model=args.model),
+              stream=True, tools=CLIENT_TOOLS, model=args.model),
     ]
 
 def main() -> int:
@@ -179,10 +199,17 @@ def main() -> int:
     print(f"upstream  {UPSTREAM}")
     print(f"model     {args.model}")
     print(f"egress    {args.proxy or 'direct (this host)'}")
-    print(f"probes    {len(build_probes(args))} (1 baseline + 5 negative controls)\n")
+
+    # Computed, not written down. A hardcoded count silently goes stale the
+    # moment a probe is added, and then the summary understates what was tested.
+    probes = build_probes(args)
+    refusals = sum(1 for p in probes if p.expect == "403")
+    minimums = sum(1 for p in probes if p.expect == "200" and p.gate != "-")
+    print(f"probes    {len(probes)} (1 baseline + {refusals} refusal controls"
+          f" + {minimums} minimum-shape control)\n")
 
     results = []
-    for probe in build_probes(args):
+    for probe in probes:
         status, raw, elapsed = probe.fire(opener, args.timeout)
         got = str(status)
         kind, message, advice = classify(status, raw)

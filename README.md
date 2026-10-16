@@ -12,8 +12,8 @@ session.
   with **no key and no cost** — ten at the time of writing, listed in
   [OpenCode CLI](#opencode-cli) below.
 - Reproduces the complete client fingerprint the free tier gates on — including
-  the two most people miss: the `{bash, glob, grep, read}` tool quartet and
-  forced `stream: true`. See [`docs/free-tier-gates.md`](docs/free-tier-gates.md).
+  the two most people miss: a tool named exactly `read`, and forced
+  `stream: true`. See [`docs/free-tier-gates.md`](docs/free-tier-gates.md).
 - Multiplies your usable budget across N egress addresses, and fails over
   automatically when one address goes unhealthy or runs dry.
 
@@ -159,7 +159,7 @@ free-tier fingerprint is still what this repository says it is, independently
 of anything running locally:
 
 ```bash
-../scripts/gate-probe.py          # one baseline + five negative controls
+../scripts/gate-probe.py          # baseline + controls, see --help
 ```
 
 Endpoints once it is up:
@@ -484,7 +484,7 @@ NOTICE                   third-party attribution
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 103 tests, no dependencies, no stack
+python3 -m unittest discover -s tests -v   # 114 tests, no dependencies, no stack
 ```
 
 The tests cover the pool generator, the de-duplicator's decision logic, and the
