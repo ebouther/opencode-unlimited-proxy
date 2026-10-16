@@ -76,11 +76,11 @@ Two constraints shape it, both learned the hard way:
 The result: six nodes, six distinct addresses, and the pool then sits still —
 no rotation, no rate-limit pressure, nothing to babysit.
 
-> Using your own proxies? Delete the `alztrk-warp-*` / `tinyproxy-*` services and
-> `ofu-dedupe` from `docker-compose.yml`, put your endpoints in the `proxies`
-> array of `config.json`, and the rest of the stack is unchanged. That is also
-> the only way past WARP's address-space ceiling: more buckets than WARP can
-> supply means egress you control.
+> Using your own proxies? Put your endpoints in the `proxies` array of
+> `config.json`, then `docker compose up -d config-init opencode-engine` to skip
+> the WARP, `tinyproxy` and `ofu-dedupe` services entirely. That is also the only
+> way past WARP's address-space ceiling: more buckets than WARP can supply means
+> egress you control.
 
 | Piece | Role |
 |---|---|
@@ -136,13 +136,22 @@ docker compose up -d --build      # first run builds the WARP + tinyproxy images
 ```
 
 Already have your own proxies? Skip the WARP nodes entirely: put them in the
-`proxies` array of `config.json`, delete the `alztrk-warp-*` / `tinyproxy-*`
-services from `docker-compose.yml`, and you never touch Cloudflare's terms.
+`proxies` array of `config.json`, then start only the two services that do not
+touch Cloudflare —
+
+```bash
+docker compose up -d config-init opencode-engine
+```
+
+No WARP, no `tinyproxy`, no `ofu-dedupe`, and you never touch Cloudflare's
+terms. (`docker-compose.yml` is generated and CI checks it against
+`generate-compose.py`, so deleting services from it by hand will fail the
+`generated files are in sync` job. Start the services you need instead.)
 
 Then verify:
 
 ```bash
-./../scripts/smoke.sh             # or: ../scripts/smoke.sh
+../scripts/smoke.sh
 ```
 
 `smoke.sh` checks the bundle end to end. To check *upstream* — whether the
@@ -158,7 +167,7 @@ Endpoints once it is up:
 | What | Where |
 |---|---|
 | OpenAI-compatible API | `http://127.0.0.1:8080/v1` |
-| Web dashboard | `http://127.0.0.1:8081` (`admin` / `changeme-changeme` — change it) |
+| Web dashboard | `http://127.0.0.1:8081` (`admin` / `changeme-changeme` — [change it](SECURITY.md)) |
 | Proxy pool | `127.0.0.1:18090` … `18090 + nodes - 1` |
 
 > Use `http://`, and prefer `127.0.0.1` over `localhost`. A browser that has
@@ -287,8 +296,9 @@ revives it the moment the address pool frees up. Watch the `pool:` line in
 `../scripts/smoke.sh` asserts it (a drained node is reported as drained, not as
 broken, since its proxy is stopped on purpose). Scaling past the WARP ceiling
 means bringing your own egress: fill the `proxies` array in `config.json` with
-your own endpoints, drop the `alztrk-warp-*` / `tinyproxy-*` / `ofu-dedupe`
-services, and the engine keeps working unchanged.
+your own endpoints and `docker compose up -d config-init opencode-engine`. The
+WARP, `tinyproxy` and `ofu-dedupe` services are not started at all, and the
+engine keeps working unchanged.
 
 ## Monitoring
 
@@ -398,8 +408,8 @@ explicit act of yours.
 ### The alternative that sidesteps all of it
 This bundle makes no assumption about where the proxies come from. `config.json`
 takes any HTTP/SOCKS proxy list. If you have your own egress — a residential
-pool, a datacentre fleet, a company gateway — use that and drop the
-`alztrk-warp-*` / `tinyproxy-*` services entirely. Cloudflare's terms then have
+pool, a datacentre fleet, a company gateway — use that and start only
+`docker compose up -d config-init opencode-engine`. Cloudflare's terms then have
 no bearing on your setup, and neither do their rotators' limits.
 
 ### OpenCode's own terms
@@ -448,7 +458,7 @@ NOTICE                   third-party attribution
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 85 tests, no dependencies, no stack
+python3 -m unittest discover -s tests -v   # 88 tests, no dependencies, no stack
 ```
 
 The tests cover the pool generator, the de-duplicator's decision logic, and the
