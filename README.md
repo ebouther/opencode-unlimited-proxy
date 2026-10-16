@@ -413,9 +413,35 @@ pool, a datacentre fleet, a company gateway — use that and start only
 no bearing on your setup, and neither do their rotators' limits.
 
 ### OpenCode's own terms
-Not verified here. Before operating this at scale, read OpenCode's terms for the
-free tier yourself: if they prohibit circumventing quotas, that is a second
-contract question independent of Cloudflare's.
+
+**Not verified here, and this is a real contract question.** OpenCode's terms for
+the free tier have not been read or checked for this repository, and the honest
+answer is that only you can decide whether your use complies.
+
+The distinction this repository draws, so that the reasoning is at least visible
+rather than hidden in the implementation:
+
+| What the bundle does | What it deliberately does not do |
+|---|---|
+| Makes a gateway send the request shape the official client sends, so it is treated as one | Does not forge, replay or otherwise abuse a paid entitlement |
+| Publishes the exact conditions, with a probe that can falsify them | Does not obscure that the point of those conditions is to refuse non-official callers |
+| Ships a pool of distinct egress addresses | Does not pretend those addresses are anything other than what they are |
+
+The second row is the awkward one and deserves to be said plainly: **the reason
+the free tier refuses third-party callers is that it is meant for the official
+client.** Working around that refusal is the whole function of this bundle. Some
+operators in this ecosystem draw the line there — one maintainer declined to help
+with an essentially identical problem on the grounds that it breaches Anomaly's
+terms. That is a reasonable position and you may hold it too.
+
+The egress pool is a second, separate question. Quota is *believed* to be
+bucketed per source address (see the quota axis section — inferred, not measured),
+which is why several addresses mean more headroom. If it is not, the pool adds
+nothing on that axis and you are left with the request-shape workaround alone.
+
+**Decide for yourself, at the scale you intend to run.** A local single-user
+gateway is a different proposition from a hosted service with many users, and the
+line between them is not one this repository can draw for you.
 
 ---
 
