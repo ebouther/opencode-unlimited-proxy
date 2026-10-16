@@ -101,10 +101,16 @@ else
                curl -s -m 20 -x "http://127.0.0.1:$port" https://api.ipify.org 2>/dev/null
                echo
              done | grep -E '^[0-9a-fA-F:.]+$' | sort -u | wc -l)
-  echo "  $distinct distinct egress addresses for $total nodes"
+  echo "  $distinct distinct egress addresses across $ok serving nodes"
   rc=1
-  if [ "$distinct" -ge "$((total - 1))" ]; then rc=0; fi
-  check $rc "pool is de-duplicated ($distinct/$total distinct; ofu-dedupe drains the rest)"
+  # Distinctness is a statement about the nodes that are actually serving, not
+  # about how many were configured. A drained node holds no address by design:
+  # ofu-dedupe drained it precisely because the colo's pool could not give it a
+  # distinct one. Grading the pool against `total` therefore fails every install
+  # where the arbiter did its job -- a correctly drained six-node pool with four
+  # distinct addresses could never satisfy a threshold of `total - 1`.
+  if [ "$ok" -gt 0 ] && [ "$distinct" -ge "$ok" ]; then rc=0; fi
+  check $rc "pool is de-duplicated ($distinct/$ok serving distinct, $drained drained, $total configured)"
 fi
 
 # A single free-tier completion. Retries once: when the engine is shared with
