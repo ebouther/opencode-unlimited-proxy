@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Only the standard library is used, so there is nothing to install. This
+      # is deliberate: the scripts have to keep working on a machine that has
+      # nothing but python3 and docker.
+      - name: Run the test suite
+        run: python3 -m unittest discover -s tests -v
+
+  static:
+    name: syntax and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Byte-compile every python file
+        run: python3 -m compileall -q scripts stack
+
+      - name: Shell scripts parse
+        run: |
+          set -euo pipefail
+          while IFS= read -r script; do
+            echo "  bash -n $script"
+            bash -n "$script"
+          done < <(git ls-files '*.sh')
+
+      - name: JSON files parse
+        run: |
+          set -euo pipefail
+          while IFS= read -r file; do
+            echo "  python -m json.tool $file"
+            python3 -m json.tool "$file" > /dev/null
+          done < <(git ls-files '*.json')
+
+      # shellcheck ships preinstalled on the runner; installing it again only
+      # adds a way for this job to fail for reasons unrelated to the code.
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          while IFS= read -r script; do
+            echo "  shellcheck $script"
+            shellcheck -S warning "$script"
+          done < <(git ls-files '*.sh')
+
+  generated:
+    name: generated files are in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # docker-compose.yml is generated and must never be hand-edited. This is
+      # what turns that comment into a guarantee: a hand edit, or a change to
+      # the generator that was not re-run, fails here instead of at `up -d`.
+      - name: Regenerate and diff
+        run: |
+          set -euo pipefail
+          python3 stack/generate-compose.py
+          if ! git diff --quiet -- stack/docker-compose.yml stack/config.json; then
+            echo "::error::stack/docker-compose.yml or stack/config.json is out of sync with stack/generate-compose.py"
+            echo "Run: python3 stack/generate-compose.py"
+            git diff -- stack/docker-compose.yml stack/config.json
+            exit 1
+          fi
+
+  compose:
+    name: compose file is valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose config
+        run: docker compose -f stack/docker-compose.yml config --quiet
+        env:
+          WARP_ACCEPT_TOS: '1'

@@ -8,8 +8,9 @@ session.
 ## What this does, and what it does not
 
 **Does**
-- Serves OpenCode's free-tier models (`space-bunny-free`, `mimo-v2.6-flash-free`,
-  `big-pickle`, …) through an OpenAI-compatible API, with **no key and no cost**.
+- Serves OpenCode's anonymous free-tier models through an OpenAI-compatible API,
+  with **no key and no cost** — ten at the time of writing, listed in
+  [OpenCode CLI](#opencode-cli) below.
 - Reproduces the complete client fingerprint the free tier gates on — including
   the two most people miss: the `{bash, glob, grep, read}` tool quartet and
   forced `stream: true`. See [`docs/free-tier-gates.md`](docs/free-tier-gates.md).
@@ -98,7 +99,9 @@ OmniRoute ────┘   (identity + retry)      http://127.0.0.1:18091 ─�
 
 ## Measured results (this repo, 2026-10-15, 6 nodes)
 
-- `/v1/models` → 11 free models.
+- `/v1/models` → the live free catalogue (10 models on 2026-10-16). The count is
+  upstream's to change; query the endpoint rather than trusting any number
+  written here.
 - `23*17` → `391` via CLI (`opencode run`), via 9router (`oc2/*`), and via OmniRoute (`9r/snowbuddy-free`).
 - 5/5 consecutive single-turn completions → HTTP 200.
 - Sustained agent session: ~57 `/v1/chat/completion` in an hour, 47 × `200`, 11 × `499` (client-side cancellations), 0 upstream `429`.
@@ -187,11 +190,42 @@ volume from that file on every start).
         "baseURL": "http://127.0.0.1:8080/v1",
         "apiKey": "local-test-key"          // must match stack/config.json server_keys
       },
-      "models": { "space-bunny-free": {} }
+      "models": {
+        "space-bunny-free": {},
+        "big-pickle": {},
+        "cat-jam-free": {},
+        "deepseek-v4.1-flash-free": {},
+        "longcat-2.5-preview-free": {},
+        "mimo-v2.6-flash-free": {},
+        "muse-spark-1.2-contributor-free": {},
+        "muse-spark-1.3-contributor-free": {},
+        "nemotron-3.5-lightning-free": {},
+        "nemotron-3.5-super-vl-free": {}
+      }
     }
   }
 }
 ```
+
+**The list above is a snapshot, not a contract.** Upstream adds and retires
+anonymous models, and this repository does not control that. The engine asks
+OpenCode for the live catalogue on every request, so the authoritative answer is
+always:
+
+```bash
+curl -s http://127.0.0.1:8080/v1/models -H "Authorization: Bearer local-test-key" \
+  | python3 -c "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]"
+```
+
+If a model you expect is missing from `/v1/models`, it is not on the free tier
+any more, and no configuration will bring it back. Listing them explicitly is
+only so the model picker is populated at startup — it is not a filter, and a
+name in that block that upstream has retired will simply fail to resolve.
+
+Ten models are currently served. `space-bunny-free` is the default above
+because it is the one verified for sustained multi-turn sessions; see the
+`cat-jam-free` note in [Troubleshooting](#troubleshooting) before making it your
+default.
 
 ```bash
 opencode run "23*17 ?"
@@ -235,13 +269,17 @@ still there if you want it (`--node-rotation 300`), but a de-duplicated pool
 does not need it.
 
 **More nodes is not automatically more buckets.** WARP only offers a limited set
-of addresses per region — about seven from one French colo — so past that point
-`ofu-dedupe` will drain the surplus instead of pretending. Watch the `pool:`
-line in `docker logs ofu-dedupe` to see what you actually have, and
-`../scripts/smoke.sh` asserts it. Scaling past the WARP ceiling means bringing
-your own egress: fill the `proxies` array in `config.json` with your own
-endpoints, drop the `alztrk-warp-*` / `tinyproxy-*` / `ofu-dedupe` services, and
-the engine keeps working unchanged.
+of addresses per region, and a colo hands out a small one. Measured on the
+default six-node pool, one French colo yielded five usable addresses, so the
+sixth node spends its life drained and the pool runs 5/5 — distinct, but not
+six. `ofu-dedupe` drains the surplus instead of pretending otherwise, and
+revives it the moment the address pool frees up. Watch the `pool:` line in
+`docker logs ofu-dedupe` for what you actually have, and
+`../scripts/smoke.sh` asserts it (a drained node is reported as drained, not as
+broken, since its proxy is stopped on purpose). Scaling past the WARP ceiling
+means bringing your own egress: fill the `proxies` array in `config.json` with
+your own endpoints, drop the `alztrk-warp-*` / `tinyproxy-*` / `ofu-dedupe`
+services, and the engine keeps working unchanged.
 
 ## Monitoring
 
@@ -258,14 +296,24 @@ the engine keeps working unchanged.
   pool: 6/6 nodes live, 6 distinct addresses | alztrk-warp-a=104.28.194.131 ...
   ```
   A `<-- collisions` suffix means it is still working on it; `DRAINED` in the
-  log means a node lost its proxy on purpose. Nothing needs doing either way.
+  log means a node lost its proxy on purpose. A drain is reversible and the
+  arbiter reverses it on its own: each drain records the address the node was
+  holding, and as soon as nobody holds that address any more the node is put
+  back. Watch for `revived, back in the pool holding <ip>` to know it happened.
 - **Probe a single node**:
   ```bash
   curl -s -x http://127.0.0.1:18090 https://api.ipify.org; echo
   ```
-- **Undo a drain**:
+- **Undo a drain by hand** — normally unnecessary, since the arbiter revives a
+  node once its address frees up. Useful if you have just replaced a node and
+  want it back immediately:
   ```bash
   docker exec ofu-dedupe rm /markers/b && docker logs -f ofu-proxy-b
+  ```
+  A drained node's marker also says which address it was holding, which is what
+  the next pass compares against:
+  ```bash
+  docker exec ofu-dedupe cat /markers/b
   ```
 
 Signs that a node is exhausted: the engine logs `proxy became unavailable`, the
@@ -284,6 +332,7 @@ configured retries.
 | `FreeTierError` (403) | A gate is unsatisfied, or upstream moved. `./scripts/gate-probe.py` says which gate, without involving this stack. |
 | `FreeUsageLimitError` (429) | Not a gate. The address ran out of budget — nothing in the fingerprint will fix it. See [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis). Widen the pool or wait. |
 | `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine for some models (`cat-jam-free` observed). Use `space-bunny-free` for multi-turn, or disable the reasoning field client-side. |
+| A reasoning model returns **HTTP 200 with empty content** | The budget went to reasoning tokens, not the answer. `big-pickle` spent 55 of 60 tokens on reasoning across 4 of 6 probes and returned nothing; at `max_tokens: 200` it was 0 of 4. Raise `max_tokens`, or pick a model that does not think aloud (`space-bunny-free` reports `reasoning_tokens: 0`). This is not a gateway fault — the request succeeded. |
 | Node restarts in a loop, `bind: address already in use` | Something else holds 8080/8081. The engine uses host networking; free the ports. |
 
 ## Legal and terms of service
@@ -379,11 +428,38 @@ stack/
   warp/                  Cloudflare WARP node image (vendored, MIT, see warp/LICENSE)
   tinyproxy/             CONNECT proxy image + drain gate
   dedupe/                address de-duplicator (keeps the pool honest)
-scripts/smoke.sh         one-command verification
+scripts/smoke.sh         one-command verification (needs the stack running)
 scripts/gate-probe.py    isolates each upstream gate; needs no stack running
+tests/                   unit tests, standard library only
 docs/free-tier-gates.md  the four upstream gates, plus the quota axis
 NOTICE                   third-party attribution
 ```
+
+## Development
+
+```bash
+python3 -m unittest discover -s tests -v   # 67 tests, no dependencies, no stack
+```
+
+The tests cover the pool generator and the de-duplicator's decision logic — the
+two pieces where a silent mistake costs you a pool. Neither needs Docker,
+network, or a running stack.
+
+CI runs the tests, byte-compiles every Python file, parses and shellchecks every
+shell script, validates the compose file, and asserts that `docker-compose.yml`
+still matches what `generate-compose.py` generates. That last check is why the
+generated file is safe to commit: a hand edit fails CI instead of failing on
+your machine later.
+
+Two conventions worth knowing before a first patch:
+
+- **`stack/docker-compose.yml` is generated.** Change `stack/generate-compose.py`
+  and re-run it. Editing the compose file directly is caught by CI.
+- **A drain writes the address into its marker.** `ofu-dedupe` cannot measure a
+  drained node — stopping its proxy is what draining means — so the marker is the
+  only surviving record of what that node was holding, and therefore the only
+  way the arbiter can notice the address has become free and bring it back. If
+  you touch drain logic, keep that invariant.
 
 ## Licenses
 

@@ -38,9 +38,11 @@ keeps working with whatever addresses it has.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -99,9 +101,56 @@ class Node:
     def __str__(self) -> str:  # pragma: no cover - logging helper
         return f"{self.name}={self.ip or '?'}{' (drained)' if self.drained else ''}"
 
+    def marker_ip(self) -> str | None:
+        """The address recorded in this node's drain marker, if any.
+
+        A drained node cannot be measured -- that is what draining means, the
+        proxy has stopped listening -- so its address has to come from
+        somewhere else or the node can never be revived. The marker is written
+        with the address on every drain, which is what makes the way back out
+        possible without a human deleting the file.
+
+        The `address=` line is authoritative. Scanning the file for any
+        address-looking token is not: the reason text also names one ("shares
+        <ip>"), and taking the first match reads back the wrong address.
+        """
+        try:
+            with open(self.marker, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            return None
+        match = re.search(r"^address=(\S+)$", text, re.MULTILINE)
+        if match:
+            try:
+                return str(ipaddress.ip_address(match.group(1)))
+            except ValueError:
+                return None
+        # Marker written before the address was recorded explicitly: the reason
+        # names the address the node was sharing, which is the same thing.
+        match = re.search(r"shares\s+(\S+)", text)
+        if match:
+            try:
+                return str(ipaddress.ip_address(match.group(1)))
+            except ValueError:
+                return None
+        return None
+
+    def known_ip(self) -> str | None:
+        """Best available address: measured if possible, else last seen, else
+        whatever the drain marker recorded."""
+        return self.ip or self.marker_ip()
+
 
 def measure_ip(node: Node) -> str | None:
-    """Ask an IP echo service through this node's CONNECT proxy."""
+    """Ask an IP echo service through this node's CONNECT proxy.
+
+    Returns None when no service gives back something that parses as an IP
+    address. That is a destructive signal -- an unmeasurable node looks dead and
+    gets drained -- so the bar for "this is an address" is the stdlib parser,
+    not a digit check. An earlier version required dotted-quad segments, which
+    rejected IPv6 outright: an IPv6-only node measured as dead and was drained
+    while smoke.sh, which accepts colons, still counted it as alive.
+    """
     for url in IP_URLS:
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({"http": node.proxy, "https": node.proxy})
@@ -120,8 +169,12 @@ def measure_ip(node: Node) -> str | None:
             except ValueError:
                 continue
         candidate = body.split()[0] if body.split() else ""
-        if candidate and all(part.isdigit() for part in candidate.split(".")):
-            return candidate
+        if not candidate:
+            continue
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            log.debug("%s: %s returned %r, which is not an address", node.name, url, candidate)
     return None
 
 
@@ -130,14 +183,25 @@ def poll_node(node: Node) -> bool:
 
     Two readings a few seconds apart: a node whose address is mid-rotation
     should not be treated as settled just because it answered once.
+
+    A failed measurement must not erase the last known address. The node still
+    has whatever address it was last seen on, and forgetting it is what turns a
+    temporary blip into a permanent drain: with no address to compare, the
+    revival check can never see the node's address become free again.
+
+    Returns whether the node answered *now*. That is deliberately not the same
+    question as "do we know an address for it": an unmeasurable node is skipped
+    by the collision pass so its stale address is never mistaken for a current
+    one, but its address is kept so it can be revived later.
     """
     first = measure_ip(node)
     time.sleep(4)
-    node.ip = measure_ip(node) or first
-    if node.ip:
-        node.distinct_ever.add(node.ip)
+    measured = measure_ip(node) or first
+    if measured:
+        node.ip = measured
+        node.distinct_ever.add(measured)
     node.drained = os.path.exists(node.marker)
-    return node.ip is not None
+    return measured is not None
 
 
 def poll_all(nodes: list[Node]) -> list[Node]:
@@ -222,10 +286,18 @@ def roll(node: Node, previous_ip: str | None) -> str:
 
 
 def drain(node: Node, reason: str) -> None:
-    """Write the marker the node's CONNECT proxy watches."""
+    """Write the marker the node's CONNECT proxy watches.
+
+    The address goes into the marker deliberately. Once the marker exists the
+    node cannot be measured, so this is the only surviving record of what it was
+    holding -- and therefore the only way to notice later that the address has
+    become free and the node should come back.
+    """
     try:
         with open(node.marker, "w", encoding="utf-8") as handle:
             handle.write(f"{reason}\n{time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
+            if node.ip:
+                handle.write(f"address={node.ip}\n")
     except OSError as exc:
         log.error("%s: could not write marker %s (%s)", node.name, node.marker, exc)
         return
@@ -235,23 +307,37 @@ def drain(node: Node, reason: str) -> None:
 
 def revive(node: Node) -> None:
     """Clear the drain marker: its address is free again."""
+    held = node.known_ip()
     try:
         os.remove(node.marker)
     except OSError as exc:
         log.error("%s: could not clear marker %s (%s)", node.name, node.marker, exc)
         return
     node.drained = False
-    log.info("%s: revived (address %s is free again)", node.name, node.ip)
+    # Read the address before the marker goes away; afterwards the only record
+    # of what this node was holding has just been deleted.
+    log.info("%s: revived, back in the pool holding %s", node.name, held or "an unknown address")
 
 
 def revive_if_free(nodes: list[Node]) -> None:
-    """Bring drained nodes back when nobody holds their address any more."""
+    """Bring drained nodes back when nobody holds their address any more.
+
+    A drained node is not measured -- its proxy has stopped listening -- so the
+    address to check comes from the drain marker rather than a live reading.
+    Comparing against a live measurement here is the trap: it is always None,
+    the node never looks free, and the drain is permanent until a human deletes
+    the marker by hand.
+    """
     live = [n for n in nodes if not n.drained]
     if not live:
         return  # never revive the whole pool at once
     used = {n.ip for n in live if n.ip}
     for node in nodes:
-        if node.drained and node.ip and node.ip not in used:
+        if not node.drained:
+            continue
+        held = node.known_ip()
+        if held and held not in used:
+            log.info("%s: address %s is free again, reviving", node.name, held)
             revive(node)
 
 
@@ -346,6 +432,45 @@ def resolve_collisions(
     return rolls, drained
 
 
+def one_pass(
+    nodes: list[Node],
+    max_rolls: int,
+    max_retries: int,
+    max_rotations_per_pass: int,
+    settle: float,
+    dry_run: bool = False,
+) -> tuple[int, int] | None:
+    """One measure/decide/act cycle. Returns (rotations, drains), or None when
+    no node answered.
+
+    Revival gets the full node list, not just the ones that answered: a drained
+    node's proxy has stopped listening, so it is never reachable, so passing
+    only the reachable set would make the revival check structurally unable to
+    fire. That is what made drains permanent.
+    """
+    reachable = poll_all(nodes)
+    if not reachable:
+        log.warning("no node answered; will retry")
+        return None
+
+    live = [n for n in reachable if not n.drained]
+    distinct = {n.ip for n in live}
+    log.info(
+        "pool: %d/%d nodes live, %d distinct addresses%s | %s",
+        len(live),
+        len(reachable),
+        len(distinct),
+        "" if len(distinct) >= len(live) else "  <-- collisions",
+        " ".join(str(n) for n in reachable),
+    )
+
+    revive_if_free(nodes)
+    rolls, drained = resolve_collisions(
+        reachable, max_rolls, max_retries, max_rotations_per_pass, settle, dry_run
+    )
+    return rolls, drained
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="De-duplicate a WARP egress pool.")
     parser.add_argument(
@@ -411,31 +536,16 @@ def main() -> int:
 
     while True:
         try:
-            reachable = poll_all(nodes)
-            if not reachable:
-                log.warning("no node answered; retrying in %ds", args.interval)
-            else:
-                live = [n for n in reachable if not n.drained]
-                distinct = {n.ip for n in live}
-                log.info(
-                    "pool: %d/%d nodes live, %d distinct addresses%s | %s",
-                    len(live),
-                    len(reachable),
-                    len(distinct),
-                    "" if len(distinct) >= len(live) else "  <-- collisions",
-                    " ".join(str(n) for n in reachable),
-                )
-                revive_if_free(reachable)
-                rolls, drained = resolve_collisions(
-                    reachable,
-                    args.max_rolls,
-                    args.max_retries,
-                    args.max_rotations_per_pass,
-                    args.settle,
-                    args.dry_run,
-                )
-                if rolls or drained:
-                    log.info("pass summary: %d rotations, %d drained", rolls, drained)
+            result = one_pass(
+                nodes,
+                args.max_rolls,
+                args.max_retries,
+                args.max_rotations_per_pass,
+                args.settle,
+                args.dry_run,
+            )
+            if result and any(result):
+                log.info("pass summary: %d rotations, %d drained", *result)
         except Exception:  # keep the loop alive; this service is optional
             log.exception("unexpected error during pass")
 

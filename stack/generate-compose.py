@@ -147,6 +147,40 @@ def proxies(base_port: int, n_nodes: int) -> list[str]:
     return [f"http://127.0.0.1:{base_port + n}" for n in range(n_nodes)]
 
 
+def resolve_base_port(explicit: int | None, current: list[str]) -> int:
+    """The port the first proxy node listens on.
+
+    An explicit --base-port always wins, including when config.json has no
+    proxies yet. (The previous single-expression version read as
+    `explicit or parsed if current else 18090`, because the conditional binds
+    looser than `or` -- which silently dropped --base-port on a pool-less
+    config instead of honouring it.)
+    """
+    if explicit is not None:
+        if explicit < 1 or explicit > 65535:
+            raise ValueError(f"--base-port must be between 1 and 65535, got {explicit}")
+        if explicit + resolve_node_count(None, current) - 1 > 65535:
+            raise ValueError(f"--base-port {explicit} overflows the port range for this pool size")
+        return explicit
+    if current:
+        return int(current[0].rsplit(":", 1)[1])
+    return 18090
+
+
+def resolve_node_count(explicit: int | None, current: list[str]) -> int:
+    """Keep the existing pool size unless told otherwise."""
+    if explicit is not None:
+        if explicit < 1:
+            raise ValueError(f"--nodes must be at least 1, got {explicit}")
+        if explicit > len(string.ascii_lowercase):
+            raise ValueError(
+                f"--nodes {explicit} exceeds the {len(string.ascii_lowercase)} ids this "
+                f"generator can name (a-z); a larger pool needs the id scheme extended"
+            )
+        return explicit
+    return len(current) or 6
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--nodes", type=int, default=None)
@@ -167,9 +201,8 @@ def main() -> None:
     cfg = json.loads(cfg_path.read_text())
     current = cfg.get("proxies", [])
 
-    base_port = args.base_port or int(current[0].rsplit(":", 1)[1]) if current else 18090
-    n_nodes = args.nodes or len(current) or 6
-    base_port = base_port or 18090
+    base_port = resolve_base_port(args.base_port, current)
+    n_nodes = resolve_node_count(args.nodes, current)
 
     compose_path = STACK / "docker-compose.yml"
     compose_path.write_text(compose(n_nodes, base_port, args.node_rotation))

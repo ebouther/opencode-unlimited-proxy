@@ -17,10 +17,16 @@ fail=0
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 check() { if [ "$1" -eq 0 ]; then echo "PASS: $2"; else echo "FAIL: $2"; fail=1; fi; }
 
+# Record a test result in `rc` rather than relying on the status of the `[ ... ]`
+# line that produced it. A bare `check $?` after a condition reads fine but is
+# only correct while nothing sits between the two; one added line and the check
+# silently grades the wrong thing.
+
 step "1/6  engine reachable on $BASE_URL"
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$BASE_URL/health" 2>/dev/null)
-[ "$code" = "200" ] || [ "$code" = "404" ]
-check $? "engine answers on /health or / (got $code)"
+rc=1
+if [ "$code" = "200" ] || [ "$code" = "404" ]; then rc=0; fi
+check $rc "engine answers on /health or / (got $code)"
 
 step "2/6  model catalogue"
 models=$(curl -s -m 15 "$BASE_URL/v1/models" -H "Authorization: Bearer $API_KEY")
@@ -29,31 +35,64 @@ try:
     print(len(json.load(sys.stdin).get("data", [])))
 except Exception:
     print(0)' 2>/dev/null)
-[ "${count:-0}" -gt 0 ]
-check $? "v1/models returned $count models"
+rc=1
+if [ "${count:-0}" -gt 0 ]; then rc=0; fi
+check $rc "v1/models returned $count models"
 
 step "3/6  proxy pool reachable and de-duplicated (each proxy must forward to an ip echo)"
-# Proxy ports are read from the engine config so this stays correct after a resize.
+# Proxy ports are read from the engine config so this stays correct after a
+# resize, paired with their node id so a drained node can be told apart from a
+# broken one.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ports=$(python3 -c "
+mapfile -t cfg_rows < <(python3 -c "
 import json
 cfg = json.load(open('${SCRIPT_DIR}/../stack/config.json'))
-print(' '.join(p.rsplit(':', 1)[1] for p in cfg.get('proxies', [])))
+proxies = cfg.get('proxies', [])
+for n, proxy in enumerate(proxies):
+    print(chr(ord('a') + n), proxy.rsplit(':', 1)[1])
 " 2>/dev/null)
-if [ -z "$ports" ]; then echo "SKIP: could not read stack/config.json proxies"; else
-  ok=0; total=0
-  for port in $ports; do
+
+# Every configured proxy must show up. A short read used to grade a six-node
+# pool as 1/1 and report success, which is worse than failing outright.
+expected=$(grep -o '"http://127.0.0.1:[0-9]*"' "${SCRIPT_DIR}/../stack/config.json" | wc -l)
+ports=""
+if [ "${#cfg_rows[@]}" -eq 0 ] || [ "${#cfg_rows[@]}" -ne "$expected" ]; then
+  echo "FAIL: read ${#cfg_rows[@]} of $expected proxy entries from stack/config.json"
+  fail=1
+else
+  for row in "${cfg_rows[@]}"; do ports="$ports ${row#* }"; done
+fi
+
+# A drained node's proxy is *supposed* to stop listening: ofu-dedupe drains the
+# surplus when this colo's address pool cannot give everyone a distinct one.
+# Grading it as unreachable would turn a working self-healing pool into a red
+# smoke test, so drained and broken are counted separately.
+is_drained() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker exec ofu-dedupe test -f "/markers/$1" >/dev/null 2>&1
+}
+
+if [ -z "$ports" ]; then
+  echo "SKIP: could not read stack/config.json proxies"
+else
+  ok=0; total=0; drained=0
+  for row in "${cfg_rows[@]}"; do
+    id=${row%% *}; port=${row##* }
     total=$((total + 1))
     ip=$(curl -s -m 20 -x "http://127.0.0.1:$port" https://api.ipify.org 2>/dev/null)
     if printf '%s' "$ip" | grep -qE '^[0-9a-fA-F:.]+$'; then
-      ok=$((ok + 1)); echo "  :$port -> $ip"
+      ok=$((ok + 1)); echo "  $id :$port -> $ip"
+    elif is_drained "$id"; then
+      drained=$((drained + 1)); echo "  $id :$port -> drained by ofu-dedupe (expected)"
     else
-      echo "  :$port -> unreachable"
+      echo "  $id :$port -> UNREACHABLE and not drained"
     fi
   done
-  echo "  $ok/$total proxy nodes forwarding"
-  [ "$ok" -eq "$total" ]
-  check $? "all $total proxy nodes reachable"
+  serving=$((total - drained))
+  echo "  $ok/$serving serving ($drained drained, $total configured)"
+  rc=1
+  if [ "$ok" -eq "$serving" ]; then rc=0; fi
+  check $rc "every serving node answers ($ok/$serving)"
 
   # Distinctness is the whole point of the pool: quota is bucketed per source
   # address, so two nodes sharing an address are one bucket, not two. This is
@@ -63,8 +102,9 @@ if [ -z "$ports" ]; then echo "SKIP: could not read stack/config.json proxies"; 
                echo
              done | grep -E '^[0-9a-fA-F:.]+$' | sort -u | wc -l)
   echo "  $distinct distinct egress addresses for $total nodes"
-  [ "$distinct" -ge "$((total - 1))" ]
-  check $? "pool is de-duplicated ($distinct/$total distinct; ofu-dedupe drains the rest)"
+  rc=1
+  if [ "$distinct" -ge "$((total - 1))" ]; then rc=0; fi
+  check $rc "pool is de-duplicated ($distinct/$total distinct; ofu-dedupe drains the rest)"
 fi
 
 # A single free-tier completion. Retries once: when the engine is shared with
@@ -103,8 +143,9 @@ check $? "zero-tool non-stream request accepted (gates 3+4 intact)"
 
 step "6/6  webui reachable on $WEBUI"
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$WEBUI/" 2>/dev/null)
-[ "$code" = "200" ]
-check $? "webui answers 200 (got $code)"
+rc=1
+if [ "$code" = "200" ]; then rc=0; fi
+check $rc "webui answers 200 (got $code)"
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then
