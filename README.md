@@ -148,6 +148,15 @@ Endpoints once it is up:
 > cached an HTTPS upgrade for `localhost` will fail with
 > `SSL_ERROR_RX_RECORD_TOO_LONG` against a plaintext port.
 
+**Before this host is reachable by anything but you**, change the dashboard
+credentials *and* the API key. As shipped, `stack/config.json` carries the
+upstream defaults — `admin` / `changeme-changeme` for the dashboard, and
+`server_keys: ["local-test-key"]` for the API — and the dashboard binds
+`0.0.0.0:8081`, so it will listen on every interface. The API key is what stops
+unbilled traffic; the dashboard is the admin surface. Set both in
+`stack/config.json`, then `docker compose up -d` (`config-init` re-seeds the
+volume from that file on every start).
+
 ## Point your tools at it
 
 ### OpenCode CLI
