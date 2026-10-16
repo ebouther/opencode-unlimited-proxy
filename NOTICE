@@ -24,11 +24,23 @@ that acceptance is an explicit opt-in via `WARP_ACCEPT_TOS=1`, so no legal
 agreement is entered on a user's behalf. The remainder of the build is unchanged.
 
 ### CONNECT proxy — `stack/tinyproxy/`
-Files: `Dockerfile`, `tinyproxy.conf`
+Files: `Dockerfile`, `tinyproxy.conf`, `gate.sh`
 
-Thin `tinyproxy` packaging on top of Alpine Linux (`apk add tinyproxy`).
+Thin `tinyproxy` packaging on top of Alpine Linux (`apk add tinyproxy`) plus
+`gate.sh`, our own supervisor: it starts tinyproxy as a child and stops it when
+the de-duplicator writes `/markers/<NODE_ID>`, restarting it if the marker is
+removed. Draining a node this way closes the listening socket, so the engine's
+proxy health check fails immediately instead of timing out.
+
 tinyproxy is licensed **GPL-2.0**; it is installed as an Alpine package at
 build time, not vendored here, so no source-distribution obligation arises.
+
+### Address de-duplicator — `stack/dedupe/`
+Files: `Dockerfile`, `dedupe.py` — ours, MIT.
+
+Measures every node's real egress address through that node's own CONNECT proxy,
+re-registers colliding nodes one at a time, and drains the nodes that cannot be
+given a distinct address.
 
 ### Inference engine — pulled at runtime, not distributed here
 `ghcr.io/jasonxu114514/opencode2api:latest` — [`jasonxu114514/opencode2api`](https://github.com/jasonxu114514/opencode2api),
@@ -43,10 +55,11 @@ endorsement is claimed.
 
 ## Scope of the license
 The MIT license in `LICENSE` covers this repository's own files: the Compose
-files, `stack/config.json`, `stack/generate-compose.py`, `stack/tinyproxy/`,
-`stack/warp/entrypoint.sh`, `scripts/`, `docs/`, and `README.md`. It does not
-relicense the components above; `stack/warp/rotator.py` and
-`stack/warp/manager.py` remain under alztrk's MIT license.
+files, `stack/config.json`, `stack/generate-compose.py`, `stack/dedupe/`,
+`stack/tinyproxy/` (including `gate.sh`), `stack/warp/entrypoint.sh`,
+`scripts/`, `docs/`, and `README.md`. It does not relicense the components
+above; `stack/warp/rotator.py` and `stack/warp/manager.py` remain under
+alztrk's MIT license.
 
 ## Terms of service, not licences
 Two separate questions are easy to conflate. Publishing this repository raises

@@ -4,11 +4,14 @@
 Usage:
     python3 stack/generate-compose.py            # keep the current node count
     python3 stack/generate-compose.py --nodes 4  # resize the pool
-    python3 stack/generate-compose.py --nodes 6 --base-port 18090 --interval 120
+    python3 stack/generate-compose.py --nodes 6 --base-port 18090 --node-rotation 86400
 
 Each node is:
     alztrk-warp-<id>  Cloudflare WARP tunnel in its own network namespace
     tinyproxy-<id>    CONNECT proxy sharing that namespace, published on the host
+
+Plus one ofu-dedupe service that keeps the egress addresses distinct; see
+stack/dedupe.py for why that is not automatic.
 
 After regenerating:  docker compose -f stack/docker-compose.yml up -d --build
 """
@@ -30,7 +33,7 @@ ENGINE_IMAGE = "ghcr.io/jasonxu114514/opencode2api:v1.4.0"
 ENGINE_KEY = "local-test-key"  # dev-only key, override in config.json for real use
 
 
-def compose(n_nodes: int, base_port: int, interval: int) -> str:
+def compose(n_nodes: int, base_port: int, node_rotation: int) -> str:
     ids = list(string.ascii_lowercase)[:n_nodes]
     ports = {i: base_port + n for n, i in enumerate(ids)}
 
@@ -71,8 +74,12 @@ def compose(n_nodes: int, base_port: int, interval: int) -> str:
     w("")
 
     for n, node in enumerate(ids):
-        # Stagger rotation so the pool never rotates in lockstep.
-        rot = interval + n * 25
+        # Stagger the nodes' own rotation so the pool never rotates in lockstep.
+        # The interval is deliberately long: the dedupe service owns rotation in
+        # a de-duplicated pool. Leaving it short makes the nodes undo the
+        # arbiter's work every couple of minutes, and churn buys nothing when
+        # WARP only offers a handful of addresses per region anyway.
+        rot = node_rotation + n * 25
         w(f"  alztrk-warp-{node}:")
         w("    <<: *warp")
         w(f"    container_name: ofu-warp-{node}")
@@ -92,7 +99,30 @@ def compose(n_nodes: int, base_port: int, interval: int) -> str:
         w(f"    network_mode: service:alztrk-warp-{node}")
         w("    depends_on:")
         w(f"      - alztrk-warp-{node}")
+        w("    environment:")
+        w("      # Names this node's drain marker, /markers/<NODE_ID>.")
+        w(f"      - NODE_ID={node}")
+        w("    volumes:")
+        w("      - ofu-dedupe:/markers")
         w("")
+
+    w("  # Keeps egress addresses distinct across the pool. WARP draws from a")
+    w("  # small per-region pool, so nodes collide by default; this one polls")
+    w("  # every node, re-rolls the collisions, and drains nodes that cannot be")
+    w("  # given their own address. Best effort: if it dies, the pool still runs.")
+    w("  ofu-dedupe:")
+    w("    build:")
+    w("      context: ./dedupe")
+    w("    image: ofu-dedupe:local")
+    w("    container_name: ofu-dedupe")
+    w("    command:")
+    w("      - \"--interval=${DEDUPE_INTERVAL:-30}\"")
+    w("    environment:")
+    w(f"      - POOL_NODES={','.join(f'alztrk-warp-{n}' for n in ids)}")
+    w("    volumes:")
+    w("      - ofu-dedupe:/markers")
+    w("    restart: unless-stopped")
+    w("")
 
     w("  opencode-engine:")
     w(f"    image: {ENGINE_IMAGE}")
@@ -107,6 +137,7 @@ def compose(n_nodes: int, base_port: int, interval: int) -> str:
     w("")
     w("volumes:")
     w("  ofu-engine:")
+    w("  ofu-dedupe:      # per-node drain markers, shared with the proxies")
     for node in ids:
         w(f"  ofu-warp-{node}:")
     return "\n".join(out) + "\n"
@@ -120,7 +151,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--nodes", type=int, default=None)
     ap.add_argument("--base-port", type=int, default=None)
-    ap.add_argument("--interval", type=int, default=120)
+    ap.add_argument(
+        "--node-rotation",
+        type=int,
+        default=86400,
+        help=(
+            "seconds between a node's own rotations (default: 86400). The dedupe "
+            "service rotates on collision, so this only needs to be short enough "
+            "to escape an address that stops working on its own."
+        ),
+    )
     args = ap.parse_args()
 
     cfg_path = STACK / "config.json"
@@ -132,7 +172,7 @@ def main() -> None:
     base_port = base_port or 18090
 
     compose_path = STACK / "docker-compose.yml"
-    compose_path.write_text(compose(n_nodes, base_port, args.interval))
+    compose_path.write_text(compose(n_nodes, base_port, args.node_rotation))
 
     cfg["proxies"] = proxies(base_port, n_nodes)
     cfg_path.write_text(json.dumps(cfg, indent=2) + "\n")

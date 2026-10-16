@@ -18,7 +18,10 @@ session.
 
 **Does not**
 - Remove the upstream quota. It is still **per egress address**, so the ceiling
-  is `N × per-address quota`, not infinity. `N` is however many nodes you run.
+  is `N × per-address quota`, not infinity — and `N` is the number of *distinct*
+  addresses you can actually obtain, not the number of containers you started.
+  With WARP that is roughly the size of the regional address pool, about seven
+  from one French colo. Beyond that, only egress you control will do it.
 - Guarantee that any address is accepted. WARP is a shared consumer network:
   addresses repeat, are geolocated unexpectedly, and can be refused outright.
 - Carry a warranty against upstream changes. The free-tier fingerprint is not a
@@ -32,6 +35,45 @@ session.
 ---
 
 ## What it actually is
+
+Six WARP containers, six CONNECT proxies, one OpenAI-compatible gateway.
+
+The load-bearing detail is not the number of containers, it is the number of
+**distinct** egress addresses. Quota is bucketed per source address, so six
+nodes behind one address are one bucket, not six. WARP hands out addresses from
+a small per-region pool and assigns them semi-randomly, so nodes collide by
+default. Measured here on a French colo: `104.28.194.129-.132`,
+`104.28.226.128-.130` and `185.137.228.16` — about seven addresses for six
+nodes, which is barely enough to be worth de-duplicating at all.
+
+That is what `ofu-dedupe` is for. Once per pass it measures each node's real
+egress address through that node's own proxy, asks one colliding node to
+re-register, and repeats until the addresses are distinct. A node that cannot
+be given its own address is *drained*: its CONNECT proxy stops listening, the
+engine's health check drops it, and the pool stops pretending to be bigger
+than it is.
+
+Two constraints shape it, both learned the hard way:
+
+- **Changing address costs a WARP registration.** A plain
+  `disconnect`/`connect` does not move the node. Cloudflare rate-limits the
+  registration API with HTTP 429, so rotations are metered globally — one at a
+  time, at least 90 seconds apart, at most two per pass. A pool that churns
+  registrations ends up crash-looping, which is worse than a collision.
+- **The rotator's own address report cannot be trusted.** `rotator.py` caches
+  the address it saw at startup and only refreshes it when *its* rotation
+  succeeds. If a rotation half-succeeds, the cache goes stale and the cluster
+  believes two nodes are distinct when they are not. So `ofu-dedupe` measures
+  the egress itself and never asks.
+
+The result: six nodes, six distinct addresses, and the pool then sits still —
+no rotation, no rate-limit pressure, nothing to babysit.
+
+> Using your own proxies? Delete the `alztrk-warp-*` / `tinyproxy-*` services and
+> `ofu-dedupe` from `docker-compose.yml`, put your endpoints in the `proxies`
+> array of `config.json`, and the rest of the stack is unchanged. That is also
+> the only way past WARP's address-space ceiling: more buckets than WARP can
+> supply means egress you control.
 
 | Piece | Role |
 |---|---|
@@ -160,14 +202,23 @@ docker compose up -d --build
 ```
 
 `generate-compose.py` rewrites both `docker-compose.yml` and the `proxies`
-array in `stack/config.json`. Each node re-establishes its WARP tunnel every
-`WARP_ROTATION_INTERVAL` (default 120 s, staggered by 25 s per node so the pool
-never rotates in lockstep).
+array in `stack/config.json`.
 
-Adding nodes multiplies how many distinct egress buckets you have; it does not
-create quota that does not exist. WARP addresses come from a shared Cloudflare
-pool, so two nodes may occasionally land on the same address — check with
-`../scripts/smoke.sh`, which prints the address behind each node.
+Nodes no longer rotate on a timer by default: `ofu-dedupe` owns rotation, and
+it only rotates to break a collision. Left to churn on their own, the nodes
+simply undo each other's work every couple of minutes and burn WARP
+registrations until Cloudflare starts answering 429. The per-node interval is
+still there if you want it (`--node-rotation 300`), but a de-duplicated pool
+does not need it.
+
+**More nodes is not automatically more buckets.** WARP only offers a limited set
+of addresses per region — about seven from one French colo — so past that point
+`ofu-dedupe` will drain the surplus instead of pretending. Watch the `pool:`
+line in `docker logs ofu-dedupe` to see what you actually have, and
+`../scripts/smoke.sh` asserts it. Scaling past the WARP ceiling means bringing
+your own egress: fill the `proxies` array in `config.json` with your own
+endpoints, drop the `alztrk-warp-*` / `tinyproxy-*` / `ofu-dedupe` services, and
+the engine keeps working unchanged.
 
 ## Monitoring
 
@@ -175,12 +226,23 @@ pool, so two nodes may occasionally land on the same address — check with
   and counters, error rates.
 - **Logs**:
   ```bash
+  docker logs ofu-dedupe                     # pool line: live / distinct
   docker logs ofu-engine | grep -iE 'proxy became|rate limit|unavailable'
   docker compose -f stack/docker-compose.yml logs -f tinyproxy-a
   ```
+- **Pool state** — `ofu-dedupe` prints one line per pass:
+  ```
+  pool: 6/6 nodes live, 6 distinct addresses | alztrk-warp-a=104.28.194.131 ...
+  ```
+  A `<-- collisions` suffix means it is still working on it; `DRAINED` in the
+  log means a node lost its proxy on purpose. Nothing needs doing either way.
 - **Probe a single node**:
   ```bash
   curl -s -x http://127.0.0.1:18090 https://api.ipify.org; echo
+  ```
+- **Undo a drain**:
+  ```bash
+  docker exec ofu-dedupe rm /markers/b && docker logs -f ofu-proxy-b
   ```
 
 Signs that a node is exhausted: the engine logs `proxy became unavailable`, the
@@ -267,7 +329,14 @@ contract question independent of Cloudflare's.
 
 ## Known limitations
 
-- Per-egress quota is still finite; rotation widens it, never removes it.
+- Per-egress quota is still finite; a wider pool widens it, never removes it.
+- WARP offers a limited set of addresses per region (about seven from one French
+  colo). `ofu-dedupe` makes the pool match what is actually available and drains
+  the overflow — it cannot invent addresses. More buckets than that means egress
+  you control, not WARP.
+- Every address change costs a WARP registration, and Cloudflare rate-limits
+  registrations. The pool therefore converges slowly on purpose; a collision
+  that resolves in a few minutes is cheaper than a crash loop.
 - WARP is a shared consumer network: addresses can repeat, be geolocated
   unexpectedly, or be blocked outright.
 - First run builds two images (`ubu`-based WARP image, Alpine tinyproxy) — needs
@@ -284,8 +353,10 @@ stack/
   config.json            engine config + proxy pool
   generate-compose.py    pool generator (resize + proxy list)
   warp/                  Cloudflare WARP node image (vendored, MIT, see warp/LICENSE)
-  tinyproxy/             CONNECT proxy image
+  tinyproxy/             CONNECT proxy image + drain gate
+  dedupe/                address de-duplicator (keeps the pool honest)
 scripts/smoke.sh         one-command verification
+docs/free-tier-gates.md  the four upstream gates, sourced
 NOTICE                   third-party attribution
 ```
 

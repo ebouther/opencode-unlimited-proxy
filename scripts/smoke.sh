@@ -32,7 +32,7 @@ except Exception:
 [ "${count:-0}" -gt 0 ]
 check $? "v1/models returned $count models"
 
-step "3/6  proxy pool reachable (each proxy must forward to an ip echo)"
+step "3/6  proxy pool reachable and de-duplicated (each proxy must forward to an ip echo)"
 # Proxy ports are read from the engine config so this stays correct after a resize.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ports=$(python3 -c "
@@ -54,6 +54,17 @@ if [ -z "$ports" ]; then echo "SKIP: could not read stack/config.json proxies"; 
   echo "  $ok/$total proxy nodes forwarding"
   [ "$ok" -eq "$total" ]
   check $? "all $total proxy nodes reachable"
+
+  # Distinctness is the whole point of the pool: quota is bucketed per source
+  # address, so two nodes sharing an address are one bucket, not two. This is
+  # the check that would have caught the "5 of 6 nodes on one address" bug.
+  distinct=$(for port in $ports; do
+               curl -s -m 20 -x "http://127.0.0.1:$port" https://api.ipify.org 2>/dev/null
+               echo
+             done | grep -E '^[0-9a-fA-F:.]+$' | sort -u | wc -l)
+  echo "  $distinct distinct egress addresses for $total nodes"
+  [ "$distinct" -ge "$((total - 1))" ]
+  check $? "pool is de-duplicated ($distinct/$total distinct; ofu-dedupe drains the rest)"
 fi
 
 # A single free-tier completion. Retries once: when the engine is shared with

@@ -35,7 +35,7 @@ services:
     container_name: ofu-warp-a
     environment:
       - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=120
+      - WARP_ROTATION_INTERVAL=86400
       - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18090:8888"
@@ -48,13 +48,18 @@ services:
     network_mode: service:alztrk-warp-a
     depends_on:
       - alztrk-warp-a
+    environment:
+      # Names this node's drain marker, /markers/<NODE_ID>.
+      - NODE_ID=a
+    volumes:
+      - ofu-dedupe:/markers
 
   alztrk-warp-b:
     <<: *warp
     container_name: ofu-warp-b
     environment:
       - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=145
+      - WARP_ROTATION_INTERVAL=86425
       - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18091:8888"
@@ -67,13 +72,18 @@ services:
     network_mode: service:alztrk-warp-b
     depends_on:
       - alztrk-warp-b
+    environment:
+      # Names this node's drain marker, /markers/<NODE_ID>.
+      - NODE_ID=b
+    volumes:
+      - ofu-dedupe:/markers
 
   alztrk-warp-c:
     <<: *warp
     container_name: ofu-warp-c
     environment:
       - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=170
+      - WARP_ROTATION_INTERVAL=86450
       - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18092:8888"
@@ -86,13 +96,18 @@ services:
     network_mode: service:alztrk-warp-c
     depends_on:
       - alztrk-warp-c
+    environment:
+      # Names this node's drain marker, /markers/<NODE_ID>.
+      - NODE_ID=c
+    volumes:
+      - ofu-dedupe:/markers
 
   alztrk-warp-d:
     <<: *warp
     container_name: ofu-warp-d
     environment:
       - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=195
+      - WARP_ROTATION_INTERVAL=86475
       - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18093:8888"
@@ -105,13 +120,18 @@ services:
     network_mode: service:alztrk-warp-d
     depends_on:
       - alztrk-warp-d
+    environment:
+      # Names this node's drain marker, /markers/<NODE_ID>.
+      - NODE_ID=d
+    volumes:
+      - ofu-dedupe:/markers
 
   alztrk-warp-e:
     <<: *warp
     container_name: ofu-warp-e
     environment:
       - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=220
+      - WARP_ROTATION_INTERVAL=86500
       - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18094:8888"
@@ -124,13 +144,18 @@ services:
     network_mode: service:alztrk-warp-e
     depends_on:
       - alztrk-warp-e
+    environment:
+      # Names this node's drain marker, /markers/<NODE_ID>.
+      - NODE_ID=e
+    volumes:
+      - ofu-dedupe:/markers
 
   alztrk-warp-f:
     <<: *warp
     container_name: ofu-warp-f
     environment:
       - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=245
+      - WARP_ROTATION_INTERVAL=86525
       - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
     ports:
       - "18095:8888"
@@ -143,6 +168,28 @@ services:
     network_mode: service:alztrk-warp-f
     depends_on:
       - alztrk-warp-f
+    environment:
+      # Names this node's drain marker, /markers/<NODE_ID>.
+      - NODE_ID=f
+    volumes:
+      - ofu-dedupe:/markers
+
+  # Keeps egress addresses distinct across the pool. WARP draws from a
+  # small per-region pool, so nodes collide by default; this one polls
+  # every node, re-rolls the collisions, and drains nodes that cannot be
+  # given their own address. Best effort: if it dies, the pool still runs.
+  ofu-dedupe:
+    build:
+      context: ./dedupe
+    image: ofu-dedupe:local
+    container_name: ofu-dedupe
+    command:
+      - "--interval=${DEDUPE_INTERVAL:-30}"
+    environment:
+      - POOL_NODES=alztrk-warp-a,alztrk-warp-b,alztrk-warp-c,alztrk-warp-d,alztrk-warp-e,alztrk-warp-f
+    volumes:
+      - ofu-dedupe:/markers
+    restart: unless-stopped
 
   opencode-engine:
     image: ghcr.io/jasonxu114514/opencode2api:v1.4.0
@@ -157,6 +204,7 @@ services:
 
 volumes:
   ofu-engine:
+  ofu-dedupe:      # per-node drain markers, shared with the proxies
   ofu-warp-a:
   ofu-warp-b:
   ofu-warp-c:
