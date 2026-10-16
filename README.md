@@ -170,10 +170,6 @@ Endpoints once it is up:
 | Web dashboard | `http://127.0.0.1:8081` (`admin` / `changeme-changeme` — [change it](SECURITY.md)) |
 | Proxy pool | `127.0.0.1:18090` … `18090 + nodes - 1` |
 
-> Use `http://`, and prefer `127.0.0.1` over `localhost`. A browser that has
-> cached an HTTPS upgrade for `localhost` will fail with
-> `SSL_ERROR_RX_RECORD_TOO_LONG` against a plaintext port.
-
 **Both listeners bind to `127.0.0.1` by default**, which is every documented use
 of this stack. To reach it from another machine, put it behind your own TLS
 terminator or a VPN rather than widening the bind: the API is anonymous by
