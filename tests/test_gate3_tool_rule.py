@@ -71,6 +71,15 @@ class ProbeTablePinsTheRule(unittest.TestCase):
         self.assertEqual(probe.expect, "403")
         self.assertNotIn("read", probe.tools)
 
+    def test_a_long_list_without_read_is_asserted_to_fail(self):
+        # The count is not the carrier. Ten genuine names is the size the
+        # folklore workaround actually ships, so if length were load-bearing
+        # this would pass and people would keep pasting all of it.
+        probe = self.probes["ten real names, no read"]
+        self.assertEqual(probe.expect, "403")
+        self.assertEqual(len(probe.tools), 10)
+        self.assertNotIn("read", probe.tools)
+
     def test_zero_tools_is_still_refused(self):
         self.assertEqual(self.probes["zero tools"].expect, "403")
 
@@ -81,13 +90,13 @@ class ProbeTablePinsTheRule(unittest.TestCase):
         gates = {p.gate for p in self.probes.values()}
         self.assertEqual(gates, {"-", "gate 1", "gate 2", "gate 3", "gate 4"})
 
-    def test_gate_three_is_covered_by_three_probes(self):
-        # Not a limit for its own sake: three probes bracket the rule from both
-        # sides (passes with `read`, fails without, fails when renamed), and one
-        # assertion per side would not catch a rule that drifted to "read or
-        # read_file".
+    def test_gate_three_is_covered_by_five_probes(self):
+        # Not a limit for its own sake: the probes bracket the rule from every
+        # side (passes with `read`, fails without, fails when renamed, fails
+        # when long), and one assertion per side would not catch a rule that
+        # drifted to "read or read_file" or to "lots of tools".
         covering = [n for n, p in self.probes.items() if p.gate == "gate 3"]
-        self.assertEqual(len(covering), 4)
+        self.assertEqual(len(covering), 5)
 
     def test_probe_count_is_never_hardcoded_in_the_output(self):
         # The summary line computes from build_probes, so adding a probe cannot

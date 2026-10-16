@@ -44,6 +44,12 @@ UPSTREAM = "https://opencode.ai/zen/v1/chat/completions"
 CLIENT_TOOLS = ("bash", "glob", "grep", "read")
 READ_ONLY = ("read",)
 NEAR_MISS = ("read_file",)
+# The folklore workaround for this gate is a pasted list of eleven or more
+# placeholder tools. Ten genuine names and no `read` must still be refused, or
+# "add lots of tools" stays standing as a rule and nobody gets to cut the list
+# back to one. This probe is the only one that varies the *count*.
+LONG_NO_READ = ("bash", "edit", "glob", "grep", "skill",
+                "task", "todowrite", "webfetch", "websearch", "write")
 BASE62 = string.ascii_letters + string.digits
 
 # The status code alone cannot tell you what to do. `403 FreeTierError` is
@@ -176,6 +182,9 @@ def build_probes(args) -> list[Probe]:
         Probe("real names, no read", "gate 3", "403", ua=ua_ok,
               session=canonical_id("ses"), stream=True,
               tools=("bash", "glob", "grep"), model=args.model),
+        Probe("ten real names, no read", "gate 3", "403", ua=ua_ok,
+              session=canonical_id("ses"), stream=True,
+              tools=LONG_NO_READ, model=args.model),
         Probe("non-opencode UA", "gate 1", "403", ua="curl/8.0", session=canonical_id("ses"),
               stream=True, tools=CLIENT_TOOLS, model=args.model),
         Probe("shaped but unencoded session", "gate 2", "403", ua=ua_ok, session=shaped_session(),
