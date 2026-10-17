@@ -102,78 +102,6 @@ services:
     volumes:
       - ofu-dedupe:/markers
 
-  alztrk-warp-d:
-    <<: *warp
-    container_name: ofu-warp-d
-    environment:
-      - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=86475
-      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
-    ports:
-      - "18093:8888"
-    volumes:
-      - ofu-warp-d:/app/data
-
-  tinyproxy-d:
-    <<: *tinyproxy
-    container_name: ofu-proxy-d
-    network_mode: service:alztrk-warp-d
-    depends_on:
-      - alztrk-warp-d
-    environment:
-      # Names this node's drain marker, /markers/<NODE_ID>.
-      - NODE_ID=d
-    volumes:
-      - ofu-dedupe:/markers
-
-  alztrk-warp-e:
-    <<: *warp
-    container_name: ofu-warp-e
-    environment:
-      - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=86500
-      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
-    ports:
-      - "18094:8888"
-    volumes:
-      - ofu-warp-e:/app/data
-
-  tinyproxy-e:
-    <<: *tinyproxy
-    container_name: ofu-proxy-e
-    network_mode: service:alztrk-warp-e
-    depends_on:
-      - alztrk-warp-e
-    environment:
-      # Names this node's drain marker, /markers/<NODE_ID>.
-      - NODE_ID=e
-    volumes:
-      - ofu-dedupe:/markers
-
-  alztrk-warp-f:
-    <<: *warp
-    container_name: ofu-warp-f
-    environment:
-      - CORS_ALLOW_ORIGINS=*
-      - WARP_ROTATION_INTERVAL=86525
-      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
-    ports:
-      - "18095:8888"
-    volumes:
-      - ofu-warp-f:/app/data
-
-  tinyproxy-f:
-    <<: *tinyproxy
-    container_name: ofu-proxy-f
-    network_mode: service:alztrk-warp-f
-    depends_on:
-      - alztrk-warp-f
-    environment:
-      # Names this node's drain marker, /markers/<NODE_ID>.
-      - NODE_ID=f
-    volumes:
-      - ofu-dedupe:/markers
-
   # Keeps egress addresses distinct across the pool. WARP draws from a
   # small per-region pool, so nodes collide by default; this one polls
   # every node, re-rolls the collisions, and drains nodes that cannot be
@@ -186,7 +114,7 @@ services:
     command:
       - "--interval=${DEDUPE_INTERVAL:-30}"
     environment:
-      - POOL_NODES=alztrk-warp-a,alztrk-warp-b,alztrk-warp-c,alztrk-warp-d,alztrk-warp-e,alztrk-warp-f
+      - POOL_NODES=alztrk-warp-a,alztrk-warp-b,alztrk-warp-c
     volumes:
       - ofu-dedupe:/markers
     restart: unless-stopped
@@ -208,6 +136,3 @@ volumes:
   ofu-warp-a:
   ofu-warp-b:
   ofu-warp-c:
-  ofu-warp-d:
-  ofu-warp-e:
-  ofu-warp-f:

@@ -95,11 +95,11 @@ Cloudflare terms.
 
 ## What it actually is
 
-Six WARP containers, six CONNECT proxies, one OpenAI-compatible gateway.
+Three WARP containers, three CONNECT proxies, one OpenAI-compatible gateway.
 
 The load-bearing detail is not the number of containers, it is the number of
-**distinct** egress addresses. Usage is metered per source address — six nodes
-behind one address are one budget, not six. (That metering model is inferred
+**distinct** egress addresses. Usage is metered per source address — three nodes
+behind one address are one budget, not three. (That metering model is inferred
 from this stack's own behaviour rather than measured at upstream; see
 [Not a gate: the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis)
 for what was actually observed and how to falsify it.) WARP hands out addresses
@@ -128,7 +128,7 @@ Two constraints shape it, both learned the hard way:
   believes two nodes are distinct when they are not. So `ofu-dedupe` measures
   the egress itself and never asks.
 
-The result: six nodes, six distinct addresses, and the pool then sits still —
+The result: three nodes, three distinct addresses, and the pool then sits still —
 no rotation, no rate-limit pressure, nothing to babysit.
 
 > Using your own proxies? Put your endpoints in the `proxies` array of

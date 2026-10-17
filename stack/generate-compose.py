@@ -178,7 +178,7 @@ def resolve_node_count(explicit: int | None, current: list[str]) -> int:
                 f"generator can name (a-z); a larger pool needs the id scheme extended"
             )
         return explicit
-    return len(current) or 6
+    return len(current) or 3
 
 
 def main() -> None:

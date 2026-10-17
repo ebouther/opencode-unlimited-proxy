@@ -64,8 +64,8 @@ class ResolveNodeCount(unittest.TestCase):
     def test_keeps_existing_size(self):
         self.assertEqual(gc.resolve_node_count(None, ["x"] * 6), 6)
 
-    def test_defaults_to_six(self):
-        self.assertEqual(gc.resolve_node_count(None, []), 6)
+    def test_defaults_to_three(self):
+        self.assertEqual(gc.resolve_node_count(None, []), 3)
 
     def test_rejects_more_nodes_than_the_alphabet_can_name(self):
         # string.ascii_lowercase is a hard ceiling: compose() would silently
