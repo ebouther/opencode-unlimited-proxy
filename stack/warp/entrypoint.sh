@@ -48,22 +48,54 @@ service dbus start
 warp-svc &
 sleep 3
 
-# Cloudflare rate-limits the registration API and answers 429 under load. A
-# `set -e` abort here would make Docker restart the container immediately, and
-# each restart would hit the API again -- deepening the rate limit instead of
-# riding it out. Retry with a widening delay, and keep going for a long time:
-# coming up slowly is much better than crash-looping against a 429.
+# Registration must be idempotent. A node that already has a valid registration
+# (reg.json present in its writable layer, which survives `docker compose up`
+# that restarts rather than recreates the container) must NOT be forced through
+# `registration new`: that command fails with
+#   "Old registration is still around. Try running: warp-cli registration delete"
+# and the previous version of this loop treated every failure as a transient
+# Cloudflare 429, retried 12 times, then exited 1 without ever reaching
+# `exec python3 rotator.py`. Consequence: the rotator's HTTP control plane on
+# port 8001 never started, the dedupe arbiter could no longer rotate colliding
+# nodes and could only drain them, and the pool collapsed from six to two.
+#
+# So: if a registration already exists, skip `registration new` entirely. If a
+# `registration new` fails because one already exists, treat that as success.
+# Only genuine transient failures (429, network) are retried with a widening
+# delay, so a real rate limit is still ridden out instead of crash-looping.
+registered=0
+if warp-cli --accept-tos registration show >/dev/null 2>&1; then
+    echo "entrypoint: existing registration found, skipping registration new." >&2
+    registered=1
+fi
+
 attempt=1
-until warp-cli --accept-tos registration new; do
+until [ "$registered" -eq 1 ]; do
+    set +e
+    output=$(warp-cli --accept-tos registration new 2>&1)
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ]; then
+        registered=1
+        break
+    fi
+    # Permanent condition, not a 429: the node already has a registration.
+    if printf '%s' "$output" | grep -qi "Old registration is still around"; then
+        echo "entrypoint: existing registration present; continuing." >&2
+        registered=1
+        break
+    fi
     if [ "$attempt" -ge "${WARP_REGISTRATION_ATTEMPTS:-12}" ]; then
         echo "entrypoint: giving up on registration after ${attempt} attempts." >&2
-        echo "entrypoint: WARP is rate-limiting this host. Wait a few minutes, then:" >&2
-        echo "entrypoint:   docker compose restart" >&2
+        printf '%s\n' "$output" >&2
+        echo "entrypoint: WARP registration failed (rate limit or permanent error)." >&2
+        echo "entrypoint: Wait a few minutes, then: docker compose restart" >&2
         exit 1
     fi
     delay=$((attempt * 15))
     [ "$delay" -gt 120 ] && delay=120
-    echo "entrypoint: registration attempt ${attempt} failed (WARP rate limit?), retrying in ${delay}s" >&2
+    echo "entrypoint: registration attempt ${attempt} failed, retrying in ${delay}s" >&2
+    printf '%s\n' "$output" >&2
     sleep "$delay"
     attempt=$((attempt + 1))
 done

@@ -424,7 +424,10 @@ def start_rotator_http_server():
 
         uvicorn.run(rotator_app, host="0.0.0.0", port=8001, log_level="warning")
     except Exception as e:
-        log.error(f"Failed to start rotator HTTP listener: {e}")
+        # Do not swallow this: a silent failure here is exactly what makes the
+        # dedupe arbiter report ECONNREFUSED on every node with no explanation.
+        # Log the full traceback so a missing dependency or bind error is visible.
+        log.exception("Failed to start rotator HTTP listener on port 8001: %s", e)
 
 def _cleanup_warp():
     warp_bin = get_warp_bin()

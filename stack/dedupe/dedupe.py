@@ -266,7 +266,23 @@ def roll(node: Node, previous_ip: str | None) -> str:
         if outcome == "busy":
             log.info("%s: rotator reported no change", node.name)
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        log.warning("%s: rotation request failed (%s)", node.name, exc)
+        # A connection refused is not a transient failure: it means the node's
+        # rotator HTTP control plane on port 8001 is not listening at all, i.e.
+        # its entrypoint never reached `exec python3 rotator.py`. Treat it as
+        # a distinct, loud failure rather than a generic "rotation failed", so
+        # the operator sees the real cause instead of an opaque ECONNREFUSED.
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, ConnectionRefusedError) or isinstance(exc, ConnectionRefusedError):
+            log.error(
+                "%s: rotator control plane on %s is DOWN (connection refused). "
+                "Its entrypoint probably never started rotator.py -- check "
+                "`docker logs ofu-warp-%s` for the registration loop.",
+                node.name,
+                node.api,
+                node.name[-1],
+            )
+        else:
+            log.warning("%s: rotation request failed (%s)", node.name, exc)
     finally:
         _last_rotation_at = time.monotonic()
 
