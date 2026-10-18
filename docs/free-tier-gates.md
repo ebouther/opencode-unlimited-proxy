@@ -270,7 +270,7 @@ The engine, `ghcr.io/jasonxu114514/opencode2api`, implements all four:
 | 3 | Injects a tool named `read` into the outgoing tool list, preserving caller tools verbatim |
 | 4 | Forces `stream: true` upstream, reassembles JSON for non-stream callers |
 
-Verified live against this bundle (2026-10-16), engine v1.4.0:
+Verified live against this bundle (2026-10-16), engine v1.4.1:
 
 | Request shape | Result |
 |---|---|
@@ -293,7 +293,7 @@ and ≈2026-10-13). When requests start failing with `403 FreeTierError`, or wit
 2. `./scripts/smoke.sh` — does the zero-tool shape still pass?
 3. `./scripts/gate-probe.py` — which gate moved? Independent of the stack, and
    it distinguishes "gate 3 changed" from "this host is being refused".
-4. Bump the engine: `stack/generate-compose.py` pins `v1.4.0`; check
+4. Bump the engine: `stack/generate-compose.py` pins `v1.4.1`; check
    [opencode2api releases](https://github.com/jasonxu114514/opencode2api/releases)
    for a newer tag, edit `ENGINE_IMAGE`, then `docker compose up -d --build`
 5. Compare against the linked upstream issues — the bisection method in

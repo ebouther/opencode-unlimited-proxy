@@ -60,7 +60,7 @@ body:
     attributes:
       label: Client and engine version
       description: OpenCode version, and the pinned engine image if you know it.
-      placeholder: opencode 1.10.0 / opencode2api v1.4.0
+      placeholder: opencode 1.10.0 / opencode2api v1.4.1
 
   - type: dropdown
     id: change

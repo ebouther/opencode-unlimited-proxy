@@ -74,7 +74,7 @@ exactly one field:
 | shaped but unencoded session | `403` |
 
 `6/6` identical from the host's direct egress and through two WARP nodes
-(`:18090`, `:18091`). The engine is pinned to `opencode2api` v1.4.0 in
+(`:18090`, `:18091`). The engine is pinned to `opencode2api` v1.4.1 in
 `stack/generate-compose.py`.
 
 Two independent confirmations on this date:
