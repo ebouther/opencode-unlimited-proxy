@@ -157,7 +157,9 @@ OmniRoute ────┘   (identity + retry)      http://127.0.0.1:18091 ─�
 - `/v1/models` → the live free catalogue (12 models on 2026-10-16). The count is
   upstream's to change; query the endpoint rather than trusting any number
   written here.
-- `What is the answer to life, the universe, and everything?` → `42` via CLI (`opencode run`), via 9router (`oc2/*`), and via OmniRoute (`9r/snowbuddy-free`).
+- `6*7 ?` → `42`. Re-measured 2026-10-18 through the gateway and through 9router
+  (`oc2/space-bunny-free`). Through OmniRoute (`9r/snowbuddy-free`) the same request
+  returns HTTP 200.
 - 5/5 consecutive single-turn completions → HTTP 200.
 - Sustained agent session: ~57 `/v1/chat/completion` in an hour, 47 × `200`, 11 × `499` (client-side cancellations), 0 upstream `429`.
 
@@ -380,7 +382,7 @@ Add an OpenAI-compatible connection:
 | API type | `chat` |
 
 Then reference a model as `<prefix>/<model>`, so `oc2/space-bunny-free`. Measured end
-to end through 9router: HTTP 200.
+to end through 9router: HTTP 200, and `6*7 ?` came back `42`.
 
 `API type` is the field lists like this usually skip, and it is not cosmetic. Ten of
 the twelve free models are chat-native, which is what `chat` is for. The two
