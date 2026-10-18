@@ -120,7 +120,7 @@ services:
     restart: unless-stopped
 
   opencode-engine:
-    image: ghcr.io/jasonxu114514/opencode2api:v1.4.0
+    image: ghcr.io/jasonxu114514/opencode2api:v1.4.1
     container_name: ofu-engine
     network_mode: host   # so 127.0.0.1:<proxy port> resolves the pool
     volumes:

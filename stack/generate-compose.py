@@ -29,7 +29,7 @@ STACK = pathlib.Path(__file__).resolve().parent
 # Pinned on purpose: upstream broke compatibility twice in one week
 # (v1.3.8 session layout, v1.4.0), and `latest` is a liability for a shared repo.
 # To upgrade: check https://github.com/jasonxu114514/opencode2api/releases
-ENGINE_IMAGE = "ghcr.io/jasonxu114514/opencode2api:v1.4.0"
+ENGINE_IMAGE = "ghcr.io/jasonxu114514/opencode2api:v1.4.1"
 ENGINE_KEY = "local-test-key"  # dev-only key, override in config.json for real use
 
 
