@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/demo.gif" alt="A direct call to the OpenCode free tier is refused with 403 FreeTierError; the same request through this local gateway answers 391" width="820">
+  <img src="docs/media/demo.gif" alt="A direct call to the OpenCode free tier is refused with 403 FreeTierError; the same request through this local gateway answers 42" width="820">
 </p>
 
 # opencode-unlimited-proxy
@@ -157,7 +157,7 @@ OmniRoute ────┘   (identity + retry)      http://127.0.0.1:18091 ─�
 - `/v1/models` → the live free catalogue (12 models on 2026-10-16). The count is
   upstream's to change; query the endpoint rather than trusting any number
   written here.
-- `23*17` → `391` via CLI (`opencode run`), via 9router (`oc2/*`), and via OmniRoute (`9r/snowbuddy-free`).
+- `What is the answer to life, the universe, and everything?` → `42` via CLI (`opencode run`), via 9router (`oc2/*`), and via OmniRoute (`9r/snowbuddy-free`).
 - 5/5 consecutive single-turn completions → HTTP 200.
 - Sustained agent session: ~57 `/v1/chat/completion` in an hour, 47 × `200`, 11 × `499` (client-side cancellations), 0 upstream `429`.
 
@@ -380,7 +380,7 @@ Add an OpenAI-compatible connection:
 | API type | `chat` |
 
 Then reference a model as `<prefix>/<model>`, so `oc2/space-bunny-free`. Measured end
-to end through 9router: HTTP 200, and `23*17 ?` came back `391`.
+to end through 9router: HTTP 200, and the model answered `42`.
 
 `API type` is the field lists like this usually skip, and it is not cosmetic. Ten of
 the twelve free models are chat-native, which is what `chat` is for. The two
