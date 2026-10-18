@@ -380,7 +380,7 @@ Add an OpenAI-compatible connection:
 | API type | `chat` |
 
 Then reference a model as `<prefix>/<model>`, so `oc2/space-bunny-free`. Measured end
-to end through 9router: HTTP 200, and the model answered `42`.
+to end through 9router: HTTP 200.
 
 `API type` is the field lists like this usually skip, and it is not cosmetic. Ten of
 the twelve free models are chat-native, which is what `chat` is for. The two
