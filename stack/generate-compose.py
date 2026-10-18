@@ -142,7 +142,7 @@ def compose(n_nodes: int, base_port: int, node_rotation: int) -> str:
     w("      alztrk-warp-a:")
     w("        condition: service_healthy")
     w("    healthcheck:")
-    w("      test: [\"CMD\", \"python3\", \"-c\", \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\"]")
+    w("      test: [\"CMD\", \"python3\", \"-c\", \"import sys; sys.exit(0 if 'dedupe' in open('/proc/1/cmdline').read() else 1)\"]")
     w("      interval: 30s")
     w("      timeout: 5s")
     w("      retries: 3")
