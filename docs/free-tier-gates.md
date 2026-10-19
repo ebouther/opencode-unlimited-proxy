@@ -27,7 +27,9 @@ Everything below is sourced from public, live-verified reports:
 
 ## Gate 1 — User-Agent
 
-Upstream requires `User-Agent: opencode/<version>` with **version ≥ 1.17.0**.
+Upstream requires `User-Agent: opencode/<version>` with **version ≥ 1.18.0**
+(measured live 2026-10-18: `opencode/1.17.2` returns `426 Upgrade Required`,
+`opencode/1.18.0` returns `200`). Our previous note of `1.17.0` was stale.
 A bare `opencode`, or any third-party client UA, is refused with
 `403 FreeTierError`. Older versions get `426 Upgrade Required`.
 
@@ -234,11 +236,15 @@ A caller can satisfy all four gates perfectly, send a textbook request, and
 still get a `429`. That is not a gate failure and nothing about the fingerprint
 will fix it.
 
-**What is measured here.** Six nodes were serving three distinct source
-addresses. Five nodes shared one address, so five nodes drew on one budget.
-Widening the pool to six distinct addresses removed those 429s, with the
-identity and request shape held constant across the change — which rules out
-the fingerprint and points at the address as the variable.
+**What is measured here.** Six nodes in one colo yielded five distinct source
+addresses (WARP hands out roughly seven for six nodes, and nodes collide by
+default). Five nodes shared one address, so five nodes drew on one budget.
+Widening the pool to distinct addresses removed those 429s, with the
+identity and request shape held constant across the change; which rules out
+the fingerprint and points at the address as the variable. The measured
+numbers and the dedupe logic behind them are documented in
+[`stack/dedupe/dedupe.py`](../stack/dedupe/dedupe.py) and
+[`stack/generate-compose.py`](../stack/generate-compose.py).
 
 **What is inferred, not measured.** That upstream's counter actually keys on
 the source address. No controlled A/B was run here: two addresses, identical
@@ -269,6 +275,12 @@ The engine, `ghcr.io/jasonxu114514/opencode2api`, implements all four:
 | 2 | `CanonicalSessionID` (v1.3.8+): descending identifier layout, real ids preserved for cache affinity |
 | 3 | Injects a tool named `read` into the outgoing tool list, preserving caller tools verbatim |
 | 4 | Forces `stream: true` upstream, reassembles JSON for non-stream callers |
+
+Note on model-specific behaviour: `native_protocol` pins (e.g. `muse-spark-1.2-contributor-free`
+on the `responses` lane) live in the **engine image**, not in `stack/config.json`. Our config only sets
+`"models": { "refresh_seconds": 300, "protocols": {}, "free_only": true }`; the engine fetches the
+catalogue from upstream and applies its own per-model protocol. If a protocol pin changes, bump the
+engine tag (see step 4 below), not the config.
 
 Verified live against this bundle (2026-10-16), engine v1.4.1:
 
