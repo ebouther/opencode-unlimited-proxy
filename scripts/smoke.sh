@@ -10,7 +10,7 @@ set -uo pipefail
 
 BASE_URL="${1:-http://127.0.0.1:8080}"
 API_KEY="${2:-local-test-key}"
-MODEL="${3:-space-bunny-free}"
+MODEL="${3:-beam-free}"
 WEBUI="${WEBUI:-http://127.0.0.1:8081}"
 
 fail=0

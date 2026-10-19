@@ -64,7 +64,7 @@ Cloudflare terms.
 
 **Does**
 - Serves OpenCode's anonymous free-tier models through an OpenAI-compatible API,
-  with **no key and no cost** — twelve at the time of writing, listed in
+  with **no key and no cost** — nine at the time of writing, listed in
   [OpenCode CLI](#opencode-cli) below.
 - Reproduces the complete client fingerprint the free tier gates on — including
   the two most people miss: a tool named exactly `read`, and forced
@@ -154,11 +154,11 @@ OmniRoute ────┘   (identity + retry)      http://127.0.0.1:18091 ─�
 
 ## Measured results (this repo, 2026-10-15, 6 nodes)
 
-- `/v1/models` → the live free catalogue (12 models on 2026-10-16). The count is
+- `/v1/models` → the live free catalogue (9 models on 2026-10-19). The count is
   upstream's to change; query the endpoint rather than trusting any number
   written here.
 - `6*7 ?` → `42`. Re-measured 2026-10-18 through the gateway and through 9router
-  (`oc2/space-bunny-free`). Through OmniRoute (`9r/snowbuddy-free`) the same request
+  (`oc2/beam-free`). Through OmniRoute (`9r/snowbuddy-free`) the same request
   returns HTTP 200.
 - 5/5 consecutive single-turn completions → HTTP 200.
 - Sustained agent session: ~57 `/v1/chat/completion` in an hour, 47 × `200`, 11 × `499` (client-side cancellations), 0 upstream `429`.
@@ -315,7 +315,7 @@ followed by a restart is silently discarded.
 ```jsonc
 // ~/.config/opencode/opencode.jsonc
 {
-  "model": "opencode-unlimited-proxy/space-bunny-free",
+  "model": "opencode-unlimited-proxy/beam-free",
   "provider": {
     "opencode-unlimited-proxy": {
       "npm": "@ai-sdk/openai-compatible",
@@ -325,16 +325,13 @@ followed by a restart is silently discarded.
         "apiKey": "local-test-key"          // must match stack/config.json server_keys
       },
       "models": {
-        "space-bunny-free": {},
         "beam-free": {},
         "big-pickle": {},
         "deepseek-v4.1-flash-free": {},
         "glm-5.3-flash-free": {},
-        "ll-alpha-free": {},
         "longcat-2.5-preview-free": {},
         "mimo-v2.6-flash-free": {},
-        "muse-spark-1.2-contributor-free": {},
-        "muse-spark-1.3-contributor-free": {},
+        "minimax-m3.1-flash-free": {},
         "nemotron-3.5-lightning-free": {},
         "nemotron-3.5-super-vl-free": {}
       }
@@ -347,16 +344,17 @@ followed by a restart is silently discarded.
 live catalogue on every request, so `/v1/models` is always the authoritative answer.
 See [the model list moves](#the-model-list-moves).
 
-`space-bunny-free` is the default above for one measured reason: it reports
-`reasoning_tokens: 0`, so a tight `max_tokens` budget goes to the answer instead
-of to thinking. That is a property worth having whichever you pick.
+`beam-free` is the default above as a safe starting point: it is the first
+model in the live catalogue and answered every probe here. It does reason, so a
+tight `max_tokens` budget may go to thinking rather than the answer — raise
+`max_tokens` if the answer comes back empty, or pick a model whose reasoning
+you have measured yourself.
 
 What I have actually measured, on the anonymous path only:
 
 | | single turn | multi-turn |
 |---|---|---|
-| All twelve | answered | — |
-| `space-bunny-free` | yes | yes, correct |
+| All nine | answered | — |
 | `ll-alpha-free` | yes | yes, but only at `max_tokens` ≥ 300 |
 | `glm-5.3-flash-free` | yes | one correct answer, then `429`, then `502` on every node |
 | `big-pickle` | yes | spends the budget on reasoning |
@@ -381,14 +379,14 @@ Add an OpenAI-compatible connection:
 | Model prefix | `oc2`, or anything you like |
 | API type | `chat` |
 
-Then reference a model as `<prefix>/<model>`, so `oc2/space-bunny-free`. Measured end
+Then reference a model as `<prefix>/<model>`, so `oc2/beam-free`. Measured end
 to end through 9router: HTTP 200, and `6*7 ?` came back `42`.
 
-`API type` is the field lists like this usually skip, and it is not cosmetic. Ten of
-the twelve free models are chat-native, which is what `chat` is for. The two
-`muse-spark-*-contributor-free` models are `responses`-native upstream, so pointing a
-chat-typed route at those is what converts a loud `ModelProtocolUnsupported` refusal
-into a quiet empty answer.
+`API type` is the field lists like this usually skip, and it is not cosmetic. All
+nine free models currently on the tier are chat-native, which is what `chat` is
+for. (The two `muse-spark-*-contributor-free` models that were `responses`-native
+upstream were retired off the tier on 2026-10-19, so the `responses` case no
+longer applies to the free catalogue today.)
 
 Expect 9router to mark the connection `unavailable` from its own connectivity test.
 That was the state of a working node here: `testStatus: unavailable`, a 403 from
@@ -399,7 +397,7 @@ gates on. Check it with a real request rather than the test badge:
 ```bash
 curl -s http://127.0.0.1:3000/v1/chat/completions \
   -H "Authorization: Bearer <your-9router-key>" -H 'Content-Type: application/json' \
-  -d '{"model":"oc2/space-bunny-free","messages":[{"role":"user","content":"23*17 ? Reply with just the number."}]}'
+  -d '{"model":"oc2/beam-free","messages":[{"role":"user","content":"23*17 ? Reply with just the number."}]}'
 ```
 
 ### OmniRoute
@@ -418,7 +416,11 @@ than a screenshot's worth of certainty.
 Every model name in this file is a snapshot, not a contract. Upstream adds and
 retires anonymous models, and this repository does not control that. During the
 last round of work here, `cat-jam-free` was retired and `beam-free` appeared on
-the same afternoon, with no announcement either way.
+the same afternoon, with no announcement either way. On 2026-10-19
+`space-bunny-free` and the two `muse-spark-*-contributor-free` models were
+marked `deprecated` upstream and dropped from the free catalogue, so they no
+longer resolve through this gateway; `minimax-m3.1-flash-free` took their place.
+If you still have one of them in a client config, switch the name.
 
 So treat `/v1/models` as the truth and any list here as a convenience:
 
@@ -520,8 +522,8 @@ configured retries.
 | `SSL_ERROR_RX_RECORD_TOO_LONG` in the browser | You are on `https://` and/or `localhost`. Use `http://127.0.0.1:8081`. |
 | `FreeTierError` (403) | Check the **message**, not just the type — at least four different causes share it. `can only be used from within OpenCode` is a gate and `./scripts/gate-probe.py` says which one. `not available in your country` is a region block that no header fixes. See [the gates doc](docs/free-tier-gates.md#not-a-gate-the-region-block). |
 | `FreeUsageLimitError` (429) | Not a gate. The address ran out of budget — nothing in the fingerprint will fix it. See [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis). Widen the pool or wait. |
-| `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine on reasoning models. It was observed on `cat-jam-free`, which has since been retired off the tier, so the model that triggered it is gone but the class of model is not: `ll-alpha-free` and `beam-free` both reason today. I have not seen this 400 reproduce on them, so treat it as a watch item rather than a known outcome. Use `space-bunny-free` for multi-turn, or disable the reasoning field client-side. |
-| A reasoning model returns **HTTP 200 with empty content** | The budget went to reasoning, not the answer. This is not a gateway fault — the request succeeded. `big-pickle` spent 55 of 60 tokens on reasoning across 4 of 6 probes and returned nothing; at `max_tokens: 200` it was 0 of 4. `ll-alpha-free` on multi-turn returned 200 with empty content at `max_tokens: 120`, and the correct answer at 300. `beam-free` reasons as well. The reasoning tokens are not hidden: `/v1/messages` returns them as explicit `thinking` blocks and `/v1/responses` reports `incomplete_details`. Raise `max_tokens`, or pick a model that does not think aloud (`space-bunny-free` reports `reasoning_tokens: 0`). |
+| `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine on reasoning models. It was observed on `cat-jam-free`, which has since been retired off the tier, so the model that triggered it is gone but the class of model is not: `ll-alpha-free` and `beam-free` both reason today. I have not seen this 400 reproduce on them, so treat it as a watch item rather than a known outcome. Pick a non-reasoning model for multi-turn if you can (none currently on the free tier), or disable the reasoning field client-side. `space-bunny-free` was the previous recommendation but is now deprecated upstream. |
+| A reasoning model returns **HTTP 200 with empty content** | The budget went to reasoning, not the answer. This is not a gateway fault — the request succeeded. `big-pickle` spent 55 of 60 tokens on reasoning across 4 of 6 probes and returned nothing; at `max_tokens: 200` it was 0 of 4. `ll-alpha-free` on multi-turn returned 200 with empty content at `max_tokens: 120`, and the correct answer at 300. `beam-free` reasons as well. The reasoning tokens are not hidden: `/v1/messages` returns them as explicit `thinking` blocks and `/v1/responses` reports `incomplete_details`. Raise `max_tokens`, or pick a model with lower reasoning overhead. `space-bunny-free` (which reported `reasoning_tokens: 0`) is now deprecated upstream and no longer on the free tier. |
 | Node restarts in a loop, `bind: address already in use` | Something else holds 8080/8081. The engine uses host networking; free the ports. |
 
 ## Legal and terms of service

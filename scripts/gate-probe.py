@@ -195,7 +195,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--proxy", help="send through this HTTP proxy, e.g. http://127.0.0.1:18090")
-    ap.add_argument("--model", default="space-bunny-free", help="free-tier model id")
+    ap.add_argument("--model", default="beam-free", help="free-tier model id")
     ap.add_argument("--ua", default="opencode/1.19.0 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14",
                     help="User-Agent to use for the baseline and every negative control")
     ap.add_argument("--timeout", type=int, default=120, help="per-request timeout in seconds")

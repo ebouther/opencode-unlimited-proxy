@@ -46,7 +46,7 @@ class ProbeTablePinsTheRule(unittest.TestCase):
     def setUp(self):
         class Args:
             ua = "opencode/test"
-            model = "space-bunny-free"
+            model = "beam-free"
             proxy = None
             timeout = 10
         self.probes = {p.name: p for p in gp.build_probes(Args())}
