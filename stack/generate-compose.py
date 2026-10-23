@@ -79,7 +79,7 @@ def compose(n_nodes: int, base_port: int, node_rotation: int) -> str:
     w("  # Seeds the engine's config into its named volume (bind-mounting that")
     w("  # path breaks startup, so it is copied instead).")
     w("  config-init:")
-    w("    image: busybox:1.36")
+    w("    image: docker.io/library/busybox:1.36")
     w("    command: [\"sh\", \"-c\", \"install -o 1000 -g 1000 -m 0644 /seed.json /vol/config.json\"]")
     w("    volumes:")
     w("      - ./config.json:/seed.json:ro")
