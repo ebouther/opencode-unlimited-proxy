@@ -37,7 +37,7 @@ services:
   # Seeds the engine's config into its named volume (bind-mounting that
   # path breaks startup, so it is copied instead).
   config-init:
-    image: busybox:1.36
+    image: docker.io/library/busybox:1.36
     command: ["sh", "-c", "install -o 1000 -g 1000 -m 0644 /seed.json /vol/config.json"]
     volumes:
       - ./config.json:/seed.json:ro
