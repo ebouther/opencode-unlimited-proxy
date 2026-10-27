@@ -167,6 +167,10 @@ class EngineWarpCompose(unittest.TestCase):
         self.assertIn("WARP_SOURCE_IPV6=${WARP_SOURCE_IPV6:-}", self.text)
         self.assertIn("source_ipv6", self.text)
 
+    def test_requires_explicit_tos_acceptance(self):
+        self.assertIn("WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}", self.text)
+        self.assertIn('if [ "$$WARP_ACCEPT_TOS" != "1" ]', self.text)
+
 
 class CommittedArtefactsAreInSync(unittest.TestCase):
     """The committed docker-compose.yml must be what the generator produces.

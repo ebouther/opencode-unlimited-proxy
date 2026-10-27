@@ -8,11 +8,17 @@ services:
   config-init:
     image: docker.io/library/busybox:1.36
     environment:
+      - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
       - WARP_SOURCE_IPV6=${WARP_SOURCE_IPV6:-}
     command:
       - sh
       - -c
       - |
+        if [ "$$WARP_ACCEPT_TOS" != "1" ]; then
+          echo 'Cloudflare WARP terms were not accepted.' >&2
+          echo 'Read https://www.cloudflare.com/application/terms/ and set WARP_ACCEPT_TOS=1 in stack/.env.' >&2
+          exit 1
+        fi
         if [ -n "$$WARP_SOURCE_IPV6" ]; then
           sed "s|\"source_ipv6\": \"\"|\"source_ipv6\": \"$$WARP_SOURCE_IPV6\"|" /seed.json > /tmp/config.json
         else
