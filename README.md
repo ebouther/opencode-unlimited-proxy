@@ -15,35 +15,42 @@ Both halves of that recording are real, not a mockup. The top command goes
 straight to `opencode.ai/zen/v1` and gets the refusal the free tier hands out by
 default. The bottom one goes through this gateway and gets an answer, with no
 upstream API key configured anywhere in it. What the gateway removes is the
-refusal. What the rotating pool removes is the per-address quota ceiling, which
+refusal. What the WARP pool removes is the per-egress-block quota ceiling, which
 is a separate problem and a separate cause.
 
 ## Get it running
 
-> **Linux only.** The rotating pool needs privileged containers and
-> `/dev/net/tun`, which Docker Desktop on macOS and Windows does not provide.
-> There is no macOS or Windows path in this repository today.
+> **Linux, tested path.** The default mode runs the engine in the host network
+> namespace and needs outbound UDP to Cloudflare on port 2408. The legacy
+> external-pool mode additionally needs privileged containers and
+> `/dev/net/tun`; Docker Desktop on macOS and Windows provides neither.
 > [What that rules out, and what it does not](#on-macos-or-windows).
 
 ```bash
 git clone https://github.com/ebouther/opencode-unlimited-proxy.git
 cd opencode-unlimited-proxy/stack
 
-# Cloudflare's terms have to be accepted explicitly before the WARP nodes start.
-# Read them first: https://www.cloudflare.com/application/terms/
+# Cloudflare's terms apply to the WARP tunnel. Read them first:
+# https://www.cloudflare.com/application/terms/
 cp .env.example .env && sed -i 's/WARP_ACCEPT_TOS=0/WARP_ACCEPT_TOS=1' .env
 
-docker compose up -d --build
+# Strongly recommended: your routed IPv6 /64. Each WARP exit then gets its
+# own egress /64, which is the block the free tier meters.
+ip -6 addr show scope global          # find the prefix, e.g. 2001:db8:...::/64
+sed -i 's|^WARP_SOURCE_IPV6=.*|WARP_SOURCE_IPV6=2001:db8:1234:5678::/64|' .env
+
+docker compose up -d
 ```
 
-Linux, Docker Compose v2, privileged containers, roughly 150 MB per node. The
-first `up` builds the WARP and tinyproxy images, so give it a few minutes.
+Linux, Docker Compose v2, outbound UDP 2408, and ideally a routed IPv6 `/64`.
+The engine image is pulled, not built. The first start takes seconds, then WARP
+registration adds a little more.
 
 | What | Where |
 |---|---|
 | OpenAI-compatible API | `http://127.0.0.1:8080/v1` |
 | Web dashboard | `http://127.0.0.1:8081` (`admin` / `changeme-changeme` — [change it](SECURITY.md)) |
-| Proxy pool | `127.0.0.1:18090` … `18090 + nodes - 1` |
+| WARP pool | engine-managed; `/healthz` reports `warp.active` and `warp.standby`, with no local proxy ports |
 
 Then point a client at it. One entry each, written out in full
 [below](#point-your-tools-at-it):
@@ -69,20 +76,21 @@ Cloudflare terms.
 - Reproduces the complete client fingerprint the free tier gates on — including
   the two most people miss: a tool named exactly `read`, and forced
   `stream: true`. See [`docs/free-tier-gates.md`](docs/free-tier-gates.md).
-- Multiplies your usable budget across N egress addresses, and fails over
-  automatically when one address goes unhealthy or runs dry.
+- Multiplies your usable budget across N egress blocks, and fails over
+  automatically when one block is exhausted or unhealthy.
 
 **Does not**
-- Remove the upstream quota. It appears to be metered **per egress address**, so
-  the ceiling is roughly `N × per-address quota`, not infinity — and `N` is the
-  number of *distinct* addresses you can actually obtain, not the number of
-  containers you started. With WARP that is roughly the size of the regional
-  address pool, about seven from one French colo. Beyond that, only egress you
-  control will do it. That per-address model is inferred from observed
-  behaviour rather than measured at upstream — see
+- Remove the upstream quota. It is metered **per egress block**: a `/64` on
+  IPv6 and a `/32` on IPv4, reset daily at 00:00 UTC. The ceiling is roughly
+  `N × per-block quota`, so `N` is the number of *distinct* blocks you can
+  obtain. Cloudflare's WARP IPv4 egress is one shared NAT address that other
+  users routinely exhaust; a routed IPv6 `/64` lets each exit bind its own
+  source and get its own block. Measured here on 2026-10-27, see
   [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis).
-- Guarantee that any address is accepted. WARP is a shared consumer network:
-  addresses repeat, are geolocated unexpectedly, and can be refused outright.
+- Guarantee that any block has budget. WARP is a shared consumer network:
+  exits repeat, are geolocated unexpectedly, and can be refused or already
+  exhausted. The engine rotates on `429`/`403` until an exit with headroom
+  answers or the attempt budget is spent.
 - Carry a warranty against upstream changes. The free-tier fingerprint is not a
   published contract and has already changed twice (≈2026-10-11, ≈2026-10-13).
 - Carry any affiliation with OpenCode, Cloudflare, or the upstream projects.
@@ -95,62 +103,47 @@ Cloudflare terms.
 
 ## What it actually is
 
-Three WARP containers, three CONNECT proxies, one OpenAI-compatible gateway.
+The default stack is one engine process and one userspace WARP pool. The engine
+(`opencode2api` v1.4.4+) registers Cloudflare WARP exits itself, keys them by
+egress block, and rotates on `429`/`403`. No privileged containers, no TUN, no
+external CONNECT proxies.
 
-The load-bearing detail is not the number of containers, it is the number of
-**distinct** egress addresses. Usage is metered per source address — three nodes
-behind one address are one budget, not three. (That metering model is inferred
-from this stack's own behaviour rather than measured at upstream; see
-[Not a gate: the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis)
-for what was actually observed and how to falsify it.) WARP hands out addresses
-from a small per-region pool and assigns them semi-randomly, so nodes collide by
-default. Measured here on a French colo: `104.28.194.129-.132`,
-`104.28.226.128-.130` and `185.137.228.16` — about seven addresses for six
-nodes, which is barely enough to be worth de-duplicating at all.
+The load-bearing detail is the number of **distinct egress blocks**. Usage is
+metered per `/64` (IPv6) or `/32` (IPv4), with a daily reset at 00:00 UTC.
+Three exits behind one block are one budget, not three. Cloudflare's WARP IPv4
+egress is a single shared NAT address that other users routinely exhaust, so
+rotating that address buys nothing. With `warp.stack: ipv6` and a routed
+`source_ipv6` prefix, each exit binds its own outer source address and gets a
+different `/64`, which is why IPv6 is the recommended path.
 
-That is what `ofu-dedupe` is for. Once per pass it measures each node's real
-egress address through that node's own proxy, asks one colliding node to
-re-register, and repeats until the addresses are distinct. A node that cannot
-be given its own address is *drained*: its CONNECT proxy stops listening, the
-engine's health check drops it, and the pool stops pretending to be bigger
-than it is.
+The engine's pool is dynamic: `warp.pool_size` is an upper bound, the active
+ring follows concurrency, and an exit answered with `429` or `403` is retired
+and re-registered immediately. `retry.max_attempts` controls how many exits one
+request may walk before returning the last refusal.
 
-Two constraints shape it, both learned the hard way:
-
-- **Changing address costs a WARP registration.** A plain
-  `disconnect`/`connect` does not move the node. Cloudflare rate-limits the
-  registration API with HTTP 429, so rotations are metered globally — one at a
-  time, at least 90 seconds apart, at most two per pass. A pool that churns
-  registrations ends up crash-looping, which is worse than a collision.
-- **The rotator's own address report cannot be trusted.** `rotator.py` caches
-  the address it saw at startup and only refreshes it when *its* rotation
-  succeeds. If a rotation half-succeeds, the cache goes stale and the cluster
-  believes two nodes are distinct when they are not. So `ofu-dedupe` measures
-  the egress itself and never asks.
-
-The result: three nodes, three distinct addresses, and the pool then sits still —
-no rotation, no rate-limit pressure, nothing to babysit.
-
-> Using your own proxies? Put your endpoints in the `proxies` array of
-> `config.json`, then `docker compose up -d config-init opencode-engine` to skip
-> the WARP, `tinyproxy` and `ofu-dedupe` services entirely. That is also the only
-> way past WARP's address-space ceiling: more buckets than WARP can supply means
-> egress you control.
+The legacy external-pool mode (`warp.enabled: false`) is still generated and
+documented: it runs one privileged WARP namespace and one tinyproxy per node,
+plus `ofu-dedupe`. It remains useful on hosts without a routed IPv6 `/64`, or
+as a reference for the de-duplication problem. It shares Cloudflare's IPv4 NAT,
+so it is no longer the default.
 
 | Piece | Role |
 |---|---|
-| `ghcr.io/jasonxu114514/opencode2api` (GPL-3.0) | The engine. Mints the client identity/session headers that the free tier requires, serves `/v1/*`, and round-robins over a proxy pool. |
-| Cloudflare WARP namespace per node (`stack/warp/`) | Gives each node its own egress address, re-established on a rotation interval. |
-| tinyproxy per node (`stack/tinyproxy/`) | A CONNECT proxy published on the host, sharing its WARP namespace. |
-| `stack/config.json` | Pool definition, `anonymous: true`, `free_only: true`, empty key lists. |
+| `ghcr.io/jasonxu114514/opencode2api` (GPL-3.0) | The engine. Mints the client identity/session headers, serves `/v1/*`, runs the userspace WARP pool, and rotates exits on `429`/`403`. |
+| `stack/config.json` | `anonymous: true`, `free_only: true`, empty key lists, and the `warp` block. |
+| `WARP_SOURCE_IPV6` in `.env` | The routed `/64` each exit binds its outer source from. Injected by `config-init`, never committed. |
+| `stack/warp/`, `stack/tinyproxy/`, `stack/dedupe/` | The legacy external pool, used only when `warp.enabled: false`. |
 
 ```
 opencode CLI ─┐
-9router ──────┼─► opencode2api :8080 ──► http://127.0.0.1:18090 ┐ CONNECT ┐
-OmniRoute ────┘   (identity + retry)      http://127.0.0.1:18091 ─┤ proxy   ├─► opencode.ai/inference
-                                           … one per WARP node   │ (tiny)  │   (free tier, Bearer public)
-                                                                       └ WARP ───┘
+9router ──────┼─► opencode2api :8080 ──► userspace WARP exits ──► opencode.ai/inference
+OmniRoute ────┘   (identity + retry)      one /64 per exit        (free tier, Bearer public)
 ```
+
+> Using your own proxies? Set `warp.enabled: false`, put your endpoints in the
+> `proxies` array of `config.json`, and `docker compose up -d config-init
+> opencode-engine` to skip the WARP, `tinyproxy` and `ofu-dedupe` services.
+> That is the way past WARP's address-space ceiling: egress you control.
 
 ## Measured results (this repo, 2026-10-15, 6 nodes)
 
@@ -189,9 +182,11 @@ non-zero rather than reporting anything if the baseline itself is refused.
 That is not ceremony. A run where every probe comes back 403 proves nothing,
 and a probe that cannot tell you that is worse than no probe.
 
-If the baseline comes back `429` where it expects `200`, that is your address's
-quota, not a gate and not a broken install. Wait, or send the probe through one
-of the nodes once the pool is up:
+If the baseline comes back `429` where it expects `200`, that is the egress
+block's quota, not a gate and not a broken install. The `Retry-After` points at
+the daily reset (00:00 UTC). The default stack has no local proxy ports; check
+`/healthz` for the WARP pool and let the engine rotate. In the legacy external
+pool you can still pin one node:
 
 ```bash
 ./scripts/gate-probe.py --proxy http://127.0.0.1:18090
@@ -201,28 +196,31 @@ If that passes and you want the rotating pool behind it, carry on.
 
 ## Requirements
 
-- **Linux** (native). The WARP nodes create a TUN device and route through it, so
-  each one needs `/dev/net/tun` plus `privileged` and `NET_ADMIN`. Docker Desktop
-  on macOS and Windows runs its containers in a Linux VM that does not hand those
-  out the way a Linux host does, and WARP will not come up without them.
+- **Linux** (native). The default engine-managed WARP mode needs
+  `network_mode: host` and outbound UDP 2408. The legacy external pool
+  additionally needs `/dev/net/tun` plus `privileged` and `NET_ADMIN`, which
+  Docker Desktop on macOS and Windows does not hand out.
 - **Docker Engine** + **Docker Compose v2** (`docker compose`, not `docker-compose`).
-- Privileged containers are required: WARP creates a TUN device and routes
-  through it, so each node runs `privileged` + `NET_ADMIN`.
-- ~150 MB RAM per node and outbound TCP 443/7844 to Cloudflare.
+- A routed IPv6 `/64` for the recommended path. Without one, WARP falls back to
+  its shared IPv4 NAT, which is usually exhausted.
+- Outbound TCP 443 and UDP 2408 to Cloudflare. The legacy pool also uses TCP
+  7844.
+- Roughly 100 MB for the engine; the legacy pool adds ~150 MB per node.
 
 ## On macOS or Windows
 
 There is no supported path today. This section says exactly what stops it,
 rather than suggesting something that will fail on you.
 
-Two pieces of the default stack are Linux-only:
+Two pieces are still Linux-bound:
 
-- **The WARP nodes.** Each one creates a TUN device and routes through it, which
-  needs `/dev/net/tun` and privileged containers.
-- **The engine's route to the pool.** It runs with `network_mode: host` so that
-  `http://127.0.0.1:18090` resolves to a published proxy port. On Docker Desktop
-  that host namespace belongs to the VM, so anything listening on *your*
-  `127.0.0.1` is not on the engine's `127.0.0.1`.
+- **The legacy WARP nodes** (only when `warp.enabled: false`). Each one creates a
+  TUN device and routes through it, which needs `/dev/net/tun` and privileged
+  containers.
+- **The engine's host networking.** It runs with `network_mode: host` so the
+  userspace WARP tunnel can bind a source address from your routed `/64`. On
+  Docker Desktop that host namespace belongs to the VM, so the prefix and the
+  UDP path are not yours.
 
 The engine image itself is not the problem: it is published for both `amd64`
 and `arm64`, so it runs natively on Apple Silicon. What does not work is how this
@@ -243,23 +241,32 @@ so treat it as a lead rather than a recipe.
 
 ## Variations, verification and defaults
 
-The four commands in [get it running](#get-it-running) bring up the default
-six-node pool. This section is everything that varies from that.
+The commands in [get it running](#get-it-running) bring up the default
+engine-managed WARP pool. This section is everything that varies from that.
 
-**A different pool size**, before the first start:
+**A larger WARP pool**: raise `warp.pool_size` in `stack/config.json` (1-32).
+The active ring follows concurrency, so a quiet deployment stays small. Raise
+it when several users share the gateway:
+
+```json
+"warp": { "enabled": true, "pool_size": 8, "stack": "ipv6", "source_ipv6": "" }
+```
+
+**The legacy external pool** is still generated. Set `"warp": { "enabled":
+false }` in `stack/config.json`, then:
 
 ```bash
 python3 generate-compose.py --nodes 6
+docker compose up -d --build
 ```
 
 `docker-compose.yml` is generated and CI checks it against
 `generate-compose.py`, so editing that file by hand will fail the
-`generated files are in sync` job. Change the generator, not the output, and
-start only the services you need rather than deleting them.
+`generated files are in sync` job.
 
-Already have your own proxies? Skip the WARP nodes entirely: put them in the
-`proxies` array of `config.json`, then start only the two services that do not
-touch Cloudflare —
+Already have your own proxies? Skip WARP entirely: set `warp.enabled: false`,
+put them in the `proxies` array of `config.json`, then start only the two
+services that do not touch Cloudflare —
 
 ```bash
 docker compose up -d config-init opencode-engine
@@ -274,13 +281,17 @@ Then verify:
 ../scripts/smoke.sh
 ```
 
-`smoke.sh` checks the bundle end to end and exits non-zero if anything is off. A
-drained node is not a fault: `ofu-dedupe` drains the surplus when WARP cannot give
-every node its own address, and a drained node stops listening on purpose. So the
-pool shrinks as addresses run out, and `2/2 serving, 4 drained` is a healthy
-result rather than a degraded one. The check that carries the meaning is that
-every node still serving holds a distinct address, since two nodes sharing one
-address share one quota bucket.
+`smoke.sh` checks the bundle end to end and exits non-zero if anything is off.
+In the default mode, `/healthz` is the useful signal: `warp.status` must be
+`ready`, and `warp.active` tells you how many exits are in the ring. A request
+can still take a few attempts when a fresh exit is already at its daily limit;
+the engine rotates on `429` rather than failing the request immediately.
+
+In the legacy external pool, a drained node is not a fault: `ofu-dedupe` drains
+the surplus when WARP cannot give every node its own address, and a drained
+node stops listening on purpose. `2/2 serving, 4 drained` is a healthy result
+there, and the check that carries the meaning is that every serving node holds a
+distinct address.
 
 To check *upstream* — whether the
 free-tier fingerprint is still what this repository says it is, independently
@@ -438,51 +449,73 @@ configuration.
 
 ## Scaling the address pool
 
-The pool is generated. Resize it and re-apply:
+The default mode is configured in `stack/config.json`, not generated:
+
+```json
+"warp": {
+  "enabled": true,
+  "pool_size": 4,
+  "stack": "ipv6",
+  "source_ipv6": ""
+}
+```
+
+- `pool_size` is an upper bound (1-32). The active ring follows concurrency,
+  preloads half of it, and retires idle exits after 60 seconds.
+- `source_ipv6` comes from `WARP_SOURCE_IPV6` in `.env`. Each exit binds a
+  different source address from that routed prefix, so each gets its own
+  egress `/64`.
+- `retry.max_attempts` (6 in the shipped config) is how many exits one request
+  may walk before returning the last `429`. Raise it when more exits are
+  already burned by other WARP users.
+
+More exits mean more `/64` buckets, but not every block is fresh: WARP exits
+are shared, and a new one can already be at its daily limit. The engine retires
+a refused exit and re-registers immediately, so a request may take a few
+attempts before it finds headroom.
+
+The legacy external pool is still resized with the generator:
 
 ```bash
 cd stack
+# first set "warp": { "enabled": false } in config.json
 python3 generate-compose.py --nodes 10            # ports 18090-18099
-# or start from another base port:
 python3 generate-compose.py --nodes 10 --base-port 19090
 docker compose up -d --build
 ```
 
 `generate-compose.py` rewrites both `docker-compose.yml` and the `proxies`
-array in `stack/config.json`.
+array in `stack/config.json`. In external mode, `ofu-dedupe` owns rotation and
+drains nodes that cannot get their own address; see `stack/dedupe/dedupe.py`.
+That mode shares Cloudflare's IPv4 NAT and is capped by what the colo hands
+out, which is why it is no longer the default.
 
-Nodes no longer rotate on a timer by default: `ofu-dedupe` owns rotation, and
-it only rotates to break a collision. Left to churn on their own, the nodes
-simply undo each other's work every couple of minutes and burn WARP
-registrations until Cloudflare starts answering 429. The per-node interval is
-still there if you want it (`--node-rotation 300`), but a de-duplicated pool
-does not need it.
-
-**More nodes is not automatically more buckets.** WARP only offers a limited set
-of addresses per region, and a colo hands out a small one. Measured on the
-default six-node pool, one French colo yielded five usable addresses, so the
-sixth node spends its life drained and the pool runs 5/5 — distinct, but not
-six. `ofu-dedupe` drains the surplus instead of pretending otherwise, and
-revives it the moment the address pool frees up. Watch the `pool:` line in
-`docker logs ofu-dedupe` for what you actually have, and
-`../scripts/smoke.sh` asserts it (a drained node is reported as drained, not as
-broken, since its proxy is stopped on purpose). Scaling past the WARP ceiling
-means bringing your own egress: fill the `proxies` array in `config.json` with
-your own endpoints and `docker compose up -d config-init opencode-engine`. The
-WARP, `tinyproxy` and `ofu-dedupe` services are not started at all, and the
-engine keeps working unchanged.
+> Using your own proxies? Set `warp.enabled: false`, fill `proxies` (or
+> `proxyfile`) with your endpoints, and start only `config-init` and
+> `opencode-engine`. The WARP, `tinyproxy` and `ofu-dedupe` services are not
+> started at all.
 
 ## Monitoring
 
-- **Dashboard** (`http://127.0.0.1:8081`): request distribution, per-proxy health
-  and counters, error rates.
-- **Logs**:
+- **Dashboard** (`http://127.0.0.1:8081`): request distribution, upstream health,
+  counters, error rates.
+- **Default mode, WARP pool**:
+  ```bash
+  curl -s http://127.0.0.1:8080/healthz | jq .warp
+  docker logs ofu-engine | grep -iE 'warp|429|403'
+  ```
+  `/healthz` reports `status`, `active`, `standby`, and `cooling`. The engine
+  logs `egress ... ready at <prefix>` for each registration and
+  `Rotating ... (HTTP 429)` when it retires a block. Some exits are already at
+  their daily limit when they register; that is expected, and the rotation is
+  the fix.
+- **Legacy external pool**:
   ```bash
   docker logs ofu-dedupe                     # pool line: live / distinct
   docker logs ofu-engine | grep -iE 'proxy became|rate limit|unavailable'
   docker compose -f stack/docker-compose.yml logs -f tinyproxy-a
   ```
-- **Pool state** — `ofu-dedupe` prints one line per pass:
+  `ofu-dedupe` prints one line per pass:
   ```
   pool: 6/6 nodes live, 6 distinct addresses | alztrk-warp-a=104.28.194.131 ...
   ```
@@ -491,37 +524,35 @@ engine keeps working unchanged.
   arbiter reverses it on its own: each drain records the address the node was
   holding, and as soon as nobody holds that address any more the node is put
   back. Watch for `revived, back in the pool holding <ip>` to know it happened.
-- **Probe a single node**:
+- **Probe a single legacy node**:
   ```bash
   curl -s -x http://127.0.0.1:18090 https://api.ipify.org; echo
   ```
-- **Undo a drain by hand** — normally unnecessary, since the arbiter revives a
-  node once its address frees up. Useful if you have just replaced a node and
-  want it back immediately:
+- **Undo a legacy drain by hand** — normally unnecessary, since the arbiter
+  revives a node once its address frees up:
   ```bash
   docker exec ofu-dedupe rm /markers/b && docker logs -f ofu-proxy-b
-  ```
-  A drained node's marker also says which address it was holding, which is what
-  the next pass compares against:
-  ```bash
   docker exec ofu-dedupe cat /markers/b
   ```
+  The marker says which address the node was holding, which is what the next
+  pass compares against.
 
-Signs that a node is exhausted: the engine logs `proxy became unavailable`, the
-dashboard flips it to `Unavailable`, and completions start failing after the
-configured retries.
+Signs that a legacy node is exhausted: the engine logs `proxy became
+unavailable`, the dashboard flips it to `Unavailable`, and completions start
+failing after the configured retries.
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| `proxyconnect tcp: dial tcp 127.0.0.1:1809x: connect: connection refused` | That node's proxy is down. `docker compose ps`, then `docker compose up -d tinyproxy-a`. |
-| `no healthy anonymous proxies available` | Every node failed its health check. Check WARP registration: `docker logs ofu-warp-a`. |
+| `proxyconnect tcp: dial tcp 127.0.0.1:1809x: connect: connection refused` | Legacy external pool only: that node's proxy is down. `docker compose ps`, then `docker compose up -d tinyproxy-a`. |
+| `no healthy anonymous proxies available` | Legacy external pool only: every node failed its health check. Check WARP registration with `docker logs ofu-warp-a`. |
 | Edits to `stack/config.json` seem ignored | The engine reads `/var/lib/opencode2api/config.json` from its **named volume** and prefers it over your file. `config-init` re-seeds it on `docker compose up -d`; to force it: `docker compose down && docker volume rm stack_ofu-engine && docker compose up -d`. |
 | `rename … device or resource busy` at startup | You bind-mounted the config path directly; it must be seeded by `config-init` instead. |
 | `SSL_ERROR_RX_RECORD_TOO_LONG` in the browser | You are on `https://` and/or `localhost`. Use `http://127.0.0.1:8081`. |
 | `FreeTierError` (403) | Check the **message**, not just the type — at least four different causes share it. `can only be used from within OpenCode` is a gate and `./scripts/gate-probe.py` says which one. `not available in your country` is a region block that no header fixes. See [the gates doc](docs/free-tier-gates.md#not-a-gate-the-region-block). |
-| `FreeUsageLimitError` (429) | Not a gate. The address ran out of budget — nothing in the fingerprint will fix it. See [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis). Widen the pool or wait. |
+| `warp` is `degraded` or `starting` in `/healthz` | WARP registration failed or is rate-limited. Check `docker logs ofu-engine` for `WARP` and `429`. Outbound UDP 2408 must be allowed. |
+| `FreeUsageLimitError` (429) | Not a gate. The egress block ran out of budget, reset daily at 00:00 UTC. Check `Retry-After`; on the default mode, `/healthz` shows the WARP pool and `docker logs ofu-engine` shows exits being retired and re-registered. Raise `warp.pool_size` or `retry.max_attempts`, set a routed IPv6 `/64`, or wait for the reset. See [the quota axis](docs/free-tier-gates.md#not-a-gate-the-quota-axis). |
 | `[400] … messages[N].reasoning` on multi-turn chats | Known conversion bug in the upstream engine on reasoning models. It was observed on `cat-jam-free`, which has since been retired off the tier, so the model that triggered it is gone but the class of model is not: `ll-alpha-free` and `beam-free` both reason today. I have not seen this 400 reproduce on them, so treat it as a watch item rather than a known outcome. Pick a non-reasoning model for multi-turn if you can (none currently on the free tier), or disable the reasoning field client-side. `space-bunny-free` was the previous recommendation but is now deprecated upstream. |
 | A reasoning model returns **HTTP 200 with empty content** | The budget went to reasoning, not the answer. This is not a gateway fault — the request succeeded. `big-pickle` spent 55 of 60 tokens on reasoning across 4 of 6 probes and returned nothing; at `max_tokens: 200` it was 0 of 4. `ll-alpha-free` on multi-turn returned 200 with empty content at `max_tokens: 120`, and the correct answer at 300. `beam-free` reasons as well. The reasoning tokens are not hidden: `/v1/messages` returns them as explicit `thinking` blocks and `/v1/responses` reports `incomplete_details`. Raise `max_tokens`, or pick a model with lower reasoning overhead. `space-bunny-free` (which reported `reasoning_tokens: 0`) is now deprecated upstream and no longer on the free tier. |
 | Node restarts in a loop, `bind: address already in use` | Something else holds 8080/8081. The engine uses host networking; free the ports. |
@@ -535,16 +566,18 @@ The two are separate questions, and the second one is not about licences.
 `MIT` for this repository's own files. The engine
 (`ghcr.io/jasonxu114514/opencode2api`, **GPL-3.0**) is *not* redistributed
 here, only referenced as a public container image, so no GPL obligation attaches
-to these files. `stack/warp/` is MIT code from `alztrk/opencode-ip-rotator` with
-its licence text preserved. `tinyproxy` (GPL-2.0) is installed from Alpine at
-build time, not redistributed. See [`NOTICE`](NOTICE).
+to these files. `stack/warp/` (legacy external pool) is MIT code from
+`alztrk/opencode-ip-rotator` with its licence text preserved. `tinyproxy`
+(GPL-2.0) is installed from Alpine at build time, not redistributed. See
+[`NOTICE`](NOTICE).
 
 Using the name "opencode" is nominative, to state compatibility. No affiliation
 with or endorsement by OpenCode is claimed or implied.
 
 ### Cloudflare WARP — read this before running the default pool
-The default egress source is the Cloudflare WARP client. It is a **consumer VPN
-product** under the [Cloudflare Application Terms of
+The default egress is Cloudflare WARP. The engine implements the tunnel itself
+(userspace WireGuard, no TUN), but the traffic still leaves through Cloudflare's
+consumer network under the [Cloudflare Application Terms of
 Service](https://www.cloudflare.com/application/terms/), and those terms say
 things that matter here:
 
@@ -562,9 +595,9 @@ things that matter here:
 > termination "without notice".
 
 Rotating egress to appear as several different users is outside what §3 says the
-product is for. Running several instances of the consumer client in containers
-sits outside the "one device you control" model in §2. Neither is clearly
-permitted, and neither is clearly forbidden — that is the honest reading.
+product is for. Running several exits against the consumer service sits outside
+the "one device you control" model in §2. Neither is clearly permitted, and
+neither is clearly forbidden — that is the honest reading.
 
 What this means in practice: the account can be closed, usage can be limited or
 blocked, and complaints go to a dedicated abuse mailbox
@@ -573,9 +606,10 @@ capped, and disputes go to arbitration. A breach of terms is a contract matter,
 not a criminal one — and publishing this repository is not the breach; running it
 is.
 
-Because of that, **the WARP terms are never accepted for you**: the nodes refuse
-to start unless you set `WARP_ACCEPT_TOS=1` in `stack/.env`, which is an
-explicit act of yours.
+Because of that, **the WARP terms are never accepted for you**: `config-init`
+refuses to seed the config unless you set `WARP_ACCEPT_TOS=1` in `stack/.env`,
+which is an explicit act of yours. The legacy external nodes enforce the same
+gate.
 
 ### The alternative that sidesteps all of it
 This bundle makes no assumption about where the proxies come from. `config.json`
@@ -619,32 +653,32 @@ line between them is not one this repository can draw for you.
 
 ## Known limitations
 
-- Per-egress quota is still finite; a wider pool widens it, never removes it.
-- WARP offers a limited set of addresses per region (about seven from one French
-  colo). `ofu-dedupe` makes the pool match what is actually available and drains
-  the overflow — it cannot invent addresses. More buckets than that means egress
-  you control, not WARP.
-- Every address change costs a WARP registration, and Cloudflare rate-limits
-  registrations. The pool therefore converges slowly on purpose; a collision
-  that resolves in a few minutes is cheaper than a crash loop.
-- WARP is a shared consumer network: addresses can repeat, be geolocated
+- The quota is per egress block (`/64` IPv6, `/32` IPv4), reset daily at
+  00:00 UTC. More distinct blocks means more budget, never unlimited budget.
+- Cloudflare's WARP IPv4 egress is one shared NAT address. Without a routed
+  IPv6 `/64`, every exit competes for the same exhausted bucket. That is why
+  `WARP_SOURCE_IPV6` is the recommended path, not an optional extra.
+- WARP exits are shared and not all fresh. A newly registered exit can already
+  be at its daily limit; the engine rotates on `429`/`403`, so a request may
+  take a few attempts and some seconds before it lands on headroom.
+- WARP is a shared consumer network: exits can repeat, be geolocated
   unexpectedly, or be blocked outright.
-- First run builds two images (`ubu`-based WARP image, Alpine tinyproxy) — needs
-  internet.
-- `config-init` overwrites the engine config in the volume on every
-  `up`. Local edits made through the dashboard are lost on the next `up -d`.
-- `stack/warp/` is third-party MIT code; see `NOTICE`.
+- `config-init` overwrites the engine config in the volume on every `up`.
+  Local edits made through the dashboard are lost on the next `up -d`.
+- The legacy external pool (`warp.enabled: false`) still builds two images and
+  needs privileged containers and `/dev/net/tun`. `stack/warp/` is third-party
+  MIT code; see `NOTICE`.
 
 ## Repository layout
 
 ```
 stack/
   docker-compose.yml     generated — do not hand-edit
-  config.json            engine config + proxy pool
-  generate-compose.py    pool generator (resize + proxy list)
-  warp/                  Cloudflare WARP node image (vendored, MIT, see warp/LICENSE)
-  tinyproxy/             CONNECT proxy image + drain gate
-  dedupe/                address de-duplicator (keeps the pool honest)
+  config.json            engine config + WARP pool
+  generate-compose.py    compose generator (engine-WARP and legacy modes)
+  warp/                  legacy external WARP node image (vendored, MIT)
+  tinyproxy/             legacy CONNECT proxy image + drain gate
+  dedupe/                legacy address de-duplicator
 scripts/smoke.sh         one-command verification (needs the stack running)
 scripts/gate-probe.py    isolates each upstream gate; needs no stack running
 tests/                   unit tests, standard library only
@@ -656,7 +690,7 @@ NOTICE                   third-party attribution
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 126 tests, no dependencies, no stack
+python3 -m unittest discover -s tests -v   # 135 tests, no dependencies, no stack
 ```
 
 The tests cover the pool generator, the de-duplicator's decision logic, and the
