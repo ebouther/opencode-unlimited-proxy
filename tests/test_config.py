@@ -82,18 +82,37 @@ class NothingIsSpentByAccident(unittest.TestCase):
 
 
 class PoolMatchesTheEngine(unittest.TestCase):
+    def engine_warp(self):
+        return bool(CONFIG.get("warp", {}).get("enabled"))
+
+    def test_the_pool_has_a_defined_owner(self):
+        if self.engine_warp():
+            # The engine owns registration and rotation, so there is no local
+            # proxy list to check. "direct" is what metadata refreshes use.
+            self.assertEqual(CONFIG["proxies"], ["direct"])
+            self.assertEqual(CONFIG["warp"].get("stack"), "ipv6")
+        else:
+            self.assertTrue(CONFIG["proxies"])
+
     def test_proxies_are_loopback(self):
         # The engine shares the host network namespace, so a proxy on a
         # non-loopback address would be both unreachable in practice and
         # needlessly visible on the network.
+        if self.engine_warp():
+            self.assertEqual(CONFIG["proxies"], ["direct"])
+            return
         for proxy in CONFIG["proxies"]:
             self.assertTrue(proxy.startswith("http://127.0.0.1:"), proxy)
 
     def test_ports_are_contiguous(self):
+        if self.engine_warp():
+            self.skipTest("engine-managed WARP has no local proxy ports")
         ports = [int(p.rsplit(":", 1)[1]) for p in CONFIG["proxies"]]
         self.assertEqual(ports, list(range(ports[0], ports[0] + len(ports))))
 
     def test_no_duplicate_ports(self):
+        if self.engine_warp():
+            self.skipTest("engine-managed WARP has no local proxy ports")
         ports = [p.rsplit(":", 1)[1] for p in CONFIG["proxies"]]
         self.assertEqual(len(ports), len(set(ports)))
 

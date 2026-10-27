@@ -6,10 +6,14 @@
   "zen_keys": [],
   "go_keys": [],
   "anonymous": true,
+  "warp": {
+    "enabled": true,
+    "pool_size": 4,
+    "stack": "ipv6",
+    "source_ipv6": ""
+  },
   "proxies": [
-    "http://127.0.0.1:18090",
-    "http://127.0.0.1:18091",
-    "http://127.0.0.1:18092"
+    "direct"
   ],
   "proxyfile": "",
   "upstream": {
@@ -18,7 +22,7 @@
     "anonymous": "https://opencode.ai/inference"
   },
   "retry": {
-    "max_attempts": 3,
+    "max_attempts": 6,
     "timeout_seconds": 180
   },
   "models": {

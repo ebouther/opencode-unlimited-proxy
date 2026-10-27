@@ -656,7 +656,7 @@ NOTICE                   third-party attribution
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 126 tests, no dependencies, no stack
+python3 -m unittest discover -s tests -v   # 134 tests, no dependencies, no stack
 ```
 
 The tests cover the pool generator, the de-duplicator's decision logic, and the
