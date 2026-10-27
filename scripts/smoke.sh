@@ -10,7 +10,7 @@ set -uo pipefail
 
 BASE_URL="${1:-http://127.0.0.1:8080}"
 API_KEY="${2:-local-test-key}"
-MODEL="${3:-beam-free}"
+MODEL="${3:-deepseek-v4.1-flash-free}"
 WEBUI="${WEBUI:-http://127.0.0.1:8081}"
 
 fail=0
@@ -39,11 +39,35 @@ rc=1
 if [ "${count:-0}" -gt 0 ]; then rc=0; fi
 check $rc "v1/models returned $count models"
 
-step "3/6  proxy pool reachable and de-duplicated (each proxy must forward to an ip echo)"
+step "3/6  egress pool"
+QUOTA_EXHAUSTED=0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODE=$(python3 -c "
+import json
+cfg = json.load(open('${SCRIPT_DIR}/../stack/config.json'))
+print('warp' if cfg.get('warp', {}).get('enabled') else 'external')
+" 2>/dev/null)
+
+if [ "$MODE" = "warp" ]; then
+  # The engine owns registration and rotation. Ready means at least one
+  # active exit; cooling and standby are normal states, not faults.
+  health=$(curl -s -m 10 "$BASE_URL/healthz")
+  status=$(printf '%s' "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("warp",{}).get("status",""))' 2>/dev/null)
+  active=$(printf '%s' "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("warp",{}).get("active",0))' 2>/dev/null)
+  echo "  warp.status=${status:-unknown} active=${active:-0}"
+  cooling=$(printf '%s' "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("warp",{}).get("cooling",0))' 2>/dev/null)
+  if [ "$status" = "ready" ] && [ "${active:-0}" -ge 1 ]; then
+    check 0 "engine-managed WARP pool has an active exit"
+  elif [ "${cooling:-0}" -gt 0 ]; then
+    QUOTA_EXHAUSTED=1
+    echo "SKIP: every WARP exit is cooling down (upstream daily quota). Retry after 00:00 UTC."
+  else
+    check 1 "engine-managed WARP pool has an active exit (status=${status:-unknown})"
+  fi
+else
 # Proxy ports are read from the engine config so this stays correct after a
 # resize, paired with their node id so a drained node can be told apart from a
 # broken one.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mapfile -t cfg_rows < <(python3 -c "
 import json
 cfg = json.load(open('${SCRIPT_DIR}/../stack/config.json'))
@@ -112,6 +136,7 @@ else
   if [ "$ok" -gt 0 ] && [ "$distinct" -ge "$ok" ]; then rc=0; fi
   check $rc "pool is de-duplicated ($distinct/$ok serving distinct, $drained drained, $total configured)"
 fi
+fi
 
 # A single free-tier completion. Retries once: when the engine is shared with
 # other clients, a single request can lose the race and hit a 60s timeout.
@@ -121,7 +146,10 @@ ask_chat() { # $1 = extra json fragment (e.g. '"stream":false,')
   for attempt in 1 2; do
     body=$(curl -s -m 150 -X POST "$BASE_URL/v1/chat/completions" \
       -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-      -d "{\"model\":\"$MODEL\",${extra}\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: OK\"}],\"max_tokens\":120}")
+      -d "{\"model\":\"$MODEL\",${extra}\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: OK\"}],\"max_tokens\":200}")
+    if printf '%s' "$body" | grep -q 'FreeUsageLimitError\|Free usage limit reached'; then
+      return 2
+    fi
     if printf '%s' "$body" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
 if d.get("error"):
@@ -137,15 +165,31 @@ sys.exit(0 if "OK" in text else 1)' 2>/dev/null; then
 }
 
 step "4/6  free-tier chat completion ($MODEL)"
-ask_chat ""
-check $? "chat completion returned content"
+if [ "$QUOTA_EXHAUSTED" = "1" ]; then
+  echo "SKIP: no exit with headroom; the completion checks need a successful baseline."
+else
+  ask_chat ""
+  rc=$?
+  if [ "$rc" -eq 0 ]; then check 0 "chat completion returned content"
+  elif [ "$rc" -eq 2 ]; then echo "SKIP: upstream daily quota exhausted (FreeUsageLimitError). Retry after 00:00 UTC."
+  else check 1 "chat completion returned content"
+  fi
+fi
 
 # Gates 3 and 4 of the free-tier fingerprint: no tools at all, and stream:false.
 # A gateway that only mints valid session headers returns 403 for this exact
 # shape. See docs/free-tier-gates.md -- this is the cheapest canary we have.
 step "5/6  fingerprint gate: zero tools + stream:false"
-ask_chat '"stream":false,'
-check $? "zero-tool non-stream request accepted (gates 3+4 intact)"
+if [ "$QUOTA_EXHAUSTED" = "1" ]; then
+  echo "SKIP: no exit with headroom; the gate canary needs a successful baseline."
+else
+  ask_chat '"stream":false,'
+  rc=$?
+  if [ "$rc" -eq 0 ]; then check 0 "zero-tool non-stream request accepted (gates 3+4 intact)"
+  elif [ "$rc" -eq 2 ]; then echo "SKIP: upstream daily quota exhausted (FreeUsageLimitError). Retry after 00:00 UTC."
+  else check 1 "zero-tool non-stream request accepted (gates 3+4 intact)"
+  fi
+fi
 
 step "6/6  webui reachable on $WEBUI"
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$WEBUI/" 2>/dev/null)

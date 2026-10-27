@@ -236,28 +236,32 @@ A caller can satisfy all four gates perfectly, send a textbook request, and
 still get a `429`. That is not a gate failure and nothing about the fingerprint
 will fix it.
 
-**What is measured here.** Six nodes in one colo yielded five distinct source
-addresses (WARP hands out roughly seven for six nodes, and nodes collide by
-default). Five nodes shared one address, so five nodes drew on one budget.
-Widening the pool to distinct addresses removed those 429s, with the
-identity and request shape held constant across the change; which rules out
-the fingerprint and points at the address as the variable. The measured
-numbers and the dedupe logic behind them are documented in
-[`stack/dedupe/dedupe.py`](../stack/dedupe/dedupe.py) and
-[`stack/generate-compose.py`](../stack/generate-compose.py).
+**What is measured here (2026-10-27).** The counter keys on the **egress
+block**, not the individual address: a `/64` on IPv6 and a `/32` on IPv4. A
+residential IPv4 address and Cloudflare's shared WARP IPv4 NAT both returned
+`429` with a `Retry-After` that resolved to **00:00:00 UTC**, i.e. a daily
+window. A fresh WARP IPv6 exit (`2a09:bac5:...::/64`) returned `200` "42" while
+the IPv4 path was still refused, and three parallel `beam-free` requests through
+two distinct `/64` exits all returned `200`. That is the per-block model with a
+daily reset, not the per-address model this document previously inferred.
 
-**What is inferred, not measured.** That upstream's counter actually keys on
-the source address. No controlled A/B was run here: two addresses, identical
-request streams, watching each start returning 429. The observation is
-consistent with per-address bucketing and hard to explain otherwise, since the
-pool widened throughput with nothing else changed — but it is a strong
-inference from one system, not a measurement of upstream's accounting.
+**What that changes.** Cloudflare's WARP IPv4 egress is one shared NAT address,
+so rotating it does not add headroom: everyone draws on the same exhausted
+bucket. A routed IPv6 `/64` lets each exit bind its own outer source and obtain
+its own egress `/64`, which is why `warp.stack: ipv6` plus `source_ipv6` is the
+recommended path. The engine (`opencode2api` v1.4.4+) owns this pool and retires
+an exit on `429`/`403` instead of retrying the same block.
 
-**How to falsify it.** Send a fixed request stream through two nodes and record
-when each begins returning 429. Per-address bucketing predicts the two curves
-starting at different times. A global or per-key cap predicts them starting
-together. That experiment is cheap; it simply has not been done, so treat the
-claim accordingly when you rely on it.
+**Still inferred.** The exact window boundary is observed, not documented:
+every refusal we measured pointed at the next 00:00 UTC. Whether a block's
+window is calendar-daily or rolling toward midnight is not distinguishable from
+the outside. Treat `Retry-After` as authoritative and do not model it yourself.
+
+**How to check it again.** Send the same request through two exits and compare
+their `Retry-After`. Same value at the same second means one shared block or a
+shared reset boundary; different values mean separate counters.
+`scripts/gate-probe.py --proxy ...` still distinguishes a gate from the quota
+axis, and exits `3` on quota.
 
 This axis is what the proxy pool exists for. It is also why the pool refuses to
 pretend: `ofu-dedupe` measures real egress so that six nodes are not quietly
