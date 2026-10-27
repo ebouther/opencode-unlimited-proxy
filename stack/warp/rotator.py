@@ -375,7 +375,7 @@ def health_check_loop(endpoint: str, interval: int, initial_delay: int, max_retr
                 if resp.status == 200:
                     retry_count = 0
         except HTTPError as e:
-            if e.code == 429:
+            if e.code in (429, 403):
                 retry_count += 1
                 if retry_count <= max_retries:
                     handle_rate_limit(retry_count, initial_delay, max_retries)
