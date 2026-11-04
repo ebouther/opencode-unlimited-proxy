@@ -139,6 +139,17 @@ class ComposeOutput(unittest.TestCase):
         self.assertIn("WARP_ROTATION_INTERVAL=86425", self.text)
         self.assertIn("WARP_ROTATION_INTERVAL=86450", self.text)
 
+    def test_config_init_disables_selinux_label(self):
+        # MCS labeling on shared named volumes causes Permission denied
+        # on Fedora/RHEL if config-init is confined.
+        self.assertIn("security_opt:\n      - label:disable", self.text)
+
+    def test_tinyproxy_healthcheck_probes_proxied_http(self):
+        self.assertIn("http_proxy=http://127.0.0.1:8888 wget -q -O /dev/null -T 3 http://cp.cloudflare.com/generate_204", self.text)
+
+    def test_engine_waits_for_proxy_health(self):
+        self.assertIn("tinyproxy-a:\n        condition: service_healthy", self.text)
+
 
 class EngineWarpCompose(unittest.TestCase):
     """The engine-managed mode keeps only config-init and the engine."""
@@ -170,6 +181,9 @@ class EngineWarpCompose(unittest.TestCase):
     def test_requires_explicit_tos_acceptance(self):
         self.assertIn("WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}", self.text)
         self.assertIn('if [ "$$WARP_ACCEPT_TOS" != "1" ]', self.text)
+
+    def test_config_init_disables_selinux_label(self):
+        self.assertIn("security_opt:\n      - label:disable", self.text)
 
 
 class CommittedArtefactsAreInSync(unittest.TestCase):

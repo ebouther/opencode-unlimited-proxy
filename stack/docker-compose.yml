@@ -7,6 +7,8 @@ services:
   # path breaks startup, so it is copied instead).
   config-init:
     image: docker.io/library/busybox:1.36
+    security_opt:
+      - label:disable
     environment:
       - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
       - WARP_SOURCE_IPV6=${WARP_SOURCE_IPV6:-}
