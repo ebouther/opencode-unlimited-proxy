@@ -58,7 +58,7 @@ if [ "$MODE" = "warp" ]; then
   cooling=$(printf '%s' "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("warp",{}).get("cooling",0))' 2>/dev/null)
   if [ "$status" = "ready" ] && [ "${active:-0}" -ge 1 ]; then
     check 0 "engine-managed WARP pool has an active exit"
-  elif [ "${cooling:-0}" -gt 0 ]; then
+  elif [ "${active:-0}" -eq 0 ] && [ "${cooling:-0}" -gt 0 ]; then
     QUOTA_EXHAUSTED=1
     echo "SKIP: every WARP exit is cooling down (upstream daily quota). Retry after 00:00 UTC."
   else
