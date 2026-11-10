@@ -1,28 +1,31 @@
-FROM docker.io/library/ubuntu:22.04
+FROM docker.io/library/alpine:3.20
 
-ENV DEBIAN_FRONTEND=noninteractive
 ENV WARP_LOG_LEVEL=info
 
-RUN apt-get update && apt-get install -y \
-    curl \
-    gnupg \
-    lsb-release \
-    sudo \
+# Install system dependencies: Python3, pip, uvicorn, networking tools, ca-certificates, and bash for entrypoint.sh
+RUN apk add --no-cache \
     python3 \
-    python3-pip \
+    py3-pip \
+    uvicorn \
+    curl \
+    ca-certificates \
     iptables \
-    dbus \
-    net-tools \
     iproute2 \
-    && rm -rf /var/lib/apt/lists/*
+    bash
 
-RUN pip3 install curl_cffi "fastapi" "uvicorn[standard]"
+# Install python dependencies for rotator.py
+RUN python3 -m pip install --break-system-packages --no-cache-dir curl_cffi fastapi
 
-RUN curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list \
-    && apt-get update \
-    && apt-get install -y cloudflare-warp \
-    && rm -rf /var/lib/apt/lists/*
+# Extract Cloudflare WARP bundle from AnyLinux AppImage (SrDicov/anylinux-builds)
+ARG WARP_APPIMAGE_URL=https://github.com/SrDicov/anylinux-builds/releases/download/continuous/warp-x86_64.AppImage
+RUN curl -fsSL -o /tmp/warp.AppImage "${WARP_APPIMAGE_URL}" && \
+    chmod +x /tmp/warp.AppImage && \
+    /tmp/warp.AppImage --appimage-extract && \
+    rm -rf /opt/warp && \
+    (mv AppDir /opt/warp 2>/dev/null || mv squashfs-root /opt/warp) && \
+    rm -f /tmp/warp.AppImage && \
+    ln -s /opt/warp/bin/warp-apprun /usr/local/bin/warp-cli && \
+    ln -s /opt/warp/bin/warp-apprun /usr/local/bin/warp-svc
 
 WORKDIR /app
 

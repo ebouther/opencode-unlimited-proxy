@@ -44,7 +44,8 @@ MSG
   exit 1
 fi
 
-service dbus start
+# Cloudflare WARP IPC runs over local UNIX domain socket (/run/cloudflare-warp/warp_service)
+mkdir -p /run/cloudflare-warp /var/lib/cloudflare-warp
 warp-svc &
 sleep 3
 
