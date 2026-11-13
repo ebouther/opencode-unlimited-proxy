@@ -12,6 +12,12 @@ services:
     environment:
       - WARP_ACCEPT_TOS=${WARP_ACCEPT_TOS:-0}
       - WARP_SOURCE_IPV6=${WARP_SOURCE_IPV6:-}
+      - OPENCODE2API_SERVER_KEYS=${OPENCODE2API_SERVER_KEYS:-}
+      - WEBUI_USERNAME=${WEBUI_USERNAME:-}
+      - WEBUI_PASSWORD=${WEBUI_PASSWORD:-}
+      - LISTEN_PORT=${LISTEN_PORT:-}
+      - WEBUI_PORT=${WEBUI_PORT:-}
+      - WARP_POOL_SIZE=${WARP_POOL_SIZE:-}
     command:
       - sh
       - -c
@@ -25,6 +31,24 @@ services:
           sed "s|\"source_ipv6\": \"\"|\"source_ipv6\": \"$$WARP_SOURCE_IPV6\"|" /seed.json > /tmp/config.json
         else
           cp /seed.json /tmp/config.json
+        fi
+        if [ -n "$$OPENCODE2API_SERVER_KEYS" ]; then
+          sed -i "s|\"local-test-key\"|\"$$OPENCODE2API_SERVER_KEYS\"|g" /tmp/config.json
+        fi
+        if [ -n "$$WEBUI_USERNAME" ]; then
+          sed -i "s|\"username\": \"admin\"|\"username\": \"$$WEBUI_USERNAME\"|" /tmp/config.json
+        fi
+        if [ -n "$$WEBUI_PASSWORD" ]; then
+          sed -i "s|\"password\": \"changeme-changeme\"|\"password\": \"$$WEBUI_PASSWORD\"|" /tmp/config.json
+        fi
+        if [ -n "$$LISTEN_PORT" ]; then
+          sed -i "s|\"127.0.0.1:8080\"|\"127.0.0.1:$$LISTEN_PORT\"|" /tmp/config.json
+        fi
+        if [ -n "$$WEBUI_PORT" ]; then
+          sed -i "s|\"127.0.0.1:8081\"|\"127.0.0.1:$$WEBUI_PORT\"|" /tmp/config.json
+        fi
+        if [ -n "$$WARP_POOL_SIZE" ]; then
+          sed -i "s|\"pool_size\": 4|\"pool_size\": $$WARP_POOL_SIZE|" /tmp/config.json
         fi
         install -o 1000 -g 1000 -m 0644 /tmp/config.json /vol/config.json
     volumes:

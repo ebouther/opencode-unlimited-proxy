@@ -134,13 +134,24 @@ def get_public_ip() -> Optional[str]:
         if resp.status_code == 200:
             return resp.json().get("ip")
     except Exception:
-        try:
-            from curl_cffi import requests
-            resp = requests.get("https://ifconfig.me/ip", impersonate="chrome124", timeout=5)
-            if resp.status_code == 200:
-                return resp.text.strip()
-        except Exception:
-            return None
+        pass
+    try:
+        from curl_cffi import requests
+        resp = requests.get("https://ifconfig.me/ip", impersonate="chrome124", timeout=5)
+        if resp.status_code == 200:
+            return resp.text.strip()
+    except Exception:
+        pass
+    try:
+        from curl_cffi import requests
+        resp = requests.get("https://1.1.1.1/cdn-cgi/trace", impersonate="chrome124", timeout=5)
+        if resp.status_code == 200:
+            for line in resp.text.splitlines():
+                if line.startswith("ip="):
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return None
 
 
 def get_public_ip_via_proxy(proxy: Dict[str, str]) -> Optional[str]:
@@ -151,13 +162,23 @@ def get_public_ip_via_proxy(proxy: Dict[str, str]) -> Optional[str]:
         if resp.status_code == 200:
             return resp.json().get("ip")
     except Exception:
-        try:
-            from curl_cffi import requests
-            resp = requests.get("https://ifconfig.me/ip", impersonate="chrome124", timeout=10, proxies=proxy)
-            if resp.status_code == 200:
-                return resp.text.strip()
-        except Exception:
-            return None
+        pass
+    try:
+        from curl_cffi import requests
+        resp = requests.get("https://ifconfig.me/ip", impersonate="chrome124", timeout=10, proxies=proxy)
+        if resp.status_code == 200:
+            return resp.text.strip()
+    except Exception:
+        pass
+    try:
+        from curl_cffi import requests
+        resp = requests.get("https://1.1.1.1/cdn-cgi/trace", impersonate="chrome124", timeout=10, proxies=proxy)
+        if resp.status_code == 200:
+            for line in resp.text.splitlines():
+                if line.startswith("ip="):
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
     return None
 
 
@@ -306,7 +327,7 @@ def rotate_warp(reason: str = "Triggered") -> bool:
             rotator_endpoints = ["http://warp-rotator:8001/rotate", "http://127.0.0.1:8001/rotate"]
             for endpoint in rotator_endpoints:
                 try:
-                    req = Request(endpoint, data=b"", headers={"User-Agent": "rotator-fallback"}, method="POST")
+                    req = Request(endpoint, data=b"", headers={"User-Agent": "opencode-rotator/1.0"}, method="POST")
                     with urlopen(req, timeout=35) as resp:
                         if resp.status == 200:
                             res_data = json.loads(resp.read().decode("utf-8"))
@@ -370,7 +391,14 @@ def health_check_loop(endpoint: str, interval: int, initial_delay: int, max_retr
 
     while not stop_event.is_set():
         try:
-            req = Request(endpoint, headers={"User-Agent": "WARP-Guard/1.0"}, method="HEAD")
+            req = Request(
+                endpoint,
+                headers={
+                    "User-Agent": "opencode/1.19.0 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14",
+                    "Accept": "*/*",
+                },
+                method="HEAD",
+            )
             with urlopen(req, timeout=10) as resp:
                 if resp.status == 200:
                     retry_count = 0
