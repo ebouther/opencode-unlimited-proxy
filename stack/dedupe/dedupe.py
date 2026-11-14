@@ -155,6 +155,8 @@ def measure_ip(node: Node) -> str | None:
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({"http": node.proxy, "https": node.proxy})
         )
+        # Use a realistic User-Agent so public echo endpoints do not refuse the request
+        opener.addheaders = [("User-Agent", "curl/8.6.0"), ("Accept", "*/*")]
         try:
             with opener.open(url, timeout=DEFAULT_HTTP_TIMEOUT) as response:
                 body = response.read(256).decode(errors="replace").strip()

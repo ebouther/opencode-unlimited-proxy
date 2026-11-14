@@ -28,7 +28,14 @@ is a separate problem and a separate cause.
 
 ```bash
 git clone https://github.com/ebouther/opencode-unlimited-proxy.git
-cd opencode-unlimited-proxy/stack
+cd opencode-unlimited-proxy
+
+# Automated wizard (checks host, detects IPv6 /64, configures stack/.env, generates keys):
+./scripts/setup.sh --accept-tos --ipv6 auto --generate-keys
+cd stack && docker compose up -d
+
+# --- Or manual path ---
+cd stack
 
 # Cloudflare's terms apply to the WARP tunnel. Read them first:
 # https://www.cloudflare.com/application/terms/
@@ -265,8 +272,8 @@ docker compose up -d --build
 `generated files are in sync` job.
 
 Already have your own proxies? Skip WARP entirely: set `warp.enabled: false`,
-put them in the `proxies` array of `config.json`, then start only the two
-services that do not touch Cloudflare —
+put them in the `proxies` array of `config.json` (or use `./scripts/proxy-pool.py --update-config`),
+then start only the two services that do not touch Cloudflare —
 
 ```bash
 docker compose up -d config-init opencode-engine
@@ -274,6 +281,31 @@ docker compose up -d config-init opencode-engine
 
 No WARP, no `tinyproxy`, no `ofu-dedupe`, and you never touch Cloudflare's
 terms.
+
+### Alternative Ways to Host and Egress
+
+1. **Custom Proxy Pools (`./scripts/proxy-pool.py`)**:
+   Validate external HTTP, HTTPS, or SOCKS5 proxies against the OpenCode upstream
+   before adding them:
+   ```bash
+   ./scripts/proxy-pool.py --file my_proxies.txt --update-config
+   ```
+2. **Bridge Network Mode (`docker-compose.bridge.yml`)**:
+   For macOS, Windows (Docker Desktop), Kubernetes, or container-isolated hosting
+   without `network_mode: host`:
+   ```bash
+   docker compose -f docker-compose.bridge.yml up -d
+   ```
+3. **Headless Systemd Daemon (`opencode-proxy.service`)**:
+   Run as a persistent system service on Linux VPS hosts. Copy
+   `stack/opencode-proxy.service` to `/etc/systemd/system/` and run `systemctl enable --now opencode-proxy`.
+
+### Stealth and Fingerprinting
+
+The stack includes built-in stealth hardening:
+- **Transparent tinyproxy**: `DisableViaHeader Yes` prevents leaking `Via: 1.1 tinyproxy` headers upstream.
+- **Genuine Client Fingerprint**: Rotation health checks and control-plane probes use realistic OpenCode client headers and avoid bot/probe identification strings.
+- **Resilient Cloudflare Trace Discovery**: IP verification leverages Cloudflare's internal trace endpoints (`1.1.1.1/cdn-cgi/trace`) rather than rate-limited third-party echo sites.
 
 Then verify:
 
@@ -673,24 +705,28 @@ line between them is not one this repository can draw for you.
 
 ```
 stack/
-  docker-compose.yml     generated — do not hand-edit
-  config.json            engine config + WARP pool
-  generate-compose.py    compose generator (engine-WARP and legacy modes)
-  warp/                  legacy external WARP node image (vendored, MIT)
-  tinyproxy/             legacy CONNECT proxy image + drain gate
-  dedupe/                legacy address de-duplicator
-scripts/smoke.sh         one-command verification (needs the stack running)
-scripts/gate-probe.py    isolates each upstream gate; needs no stack running
-tests/                   unit tests, standard library only
-docs/free-tier-gates.md  the four upstream gates, plus the quota axis
-docs/gate-timeline.md    dated record of the gates moving, and what it cost
-NOTICE                   third-party attribution
+  docker-compose.yml        generated — do not hand-edit
+  docker-compose.bridge.yml bridge-network alternative (macOS/Docker Desktop/isolated)
+  opencode-proxy.service    systemd service unit for headless hosting
+  config.json               engine config + WARP pool
+  generate-compose.py       compose generator (engine-WARP and legacy modes)
+  warp/                     legacy external WARP node image (vendored, MIT)
+  tinyproxy/                legacy CONNECT proxy image + drain gate
+  dedupe/                   legacy address de-duplicator
+scripts/setup.sh            automated environment setup wizard
+scripts/proxy-pool.py       alternative proxy tester, validator & rotator
+scripts/smoke.sh            one-command verification (needs the stack running)
+scripts/gate-probe.py       isolates each upstream gate; needs no stack running
+tests/                      unit tests, standard library only
+docs/free-tier-gates.md     the four upstream gates, plus the quota axis
+docs/gate-timeline.md       dated record of the gates moving, and what it cost
+NOTICE                      third-party attribution
 ```
 
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 140 tests, no dependencies, no stack
+python3 -m unittest discover -s tests -v   # 148 tests, no dependencies, no stack
 ```
 
 The tests cover the pool generator, the de-duplicator's decision logic, and the
